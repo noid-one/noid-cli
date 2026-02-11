@@ -11,7 +11,7 @@ cargo check                    # type-check without codegen (fastest feedback)
 cargo clippy                   # lint
 ```
 
-No tests exist yet. No Makefile or build script.
+Run tests with `cargo test`. No Makefile or build script.
 
 ## Architecture
 
