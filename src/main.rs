@@ -189,10 +189,81 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Escape a string for safe use in a shell command.
+/// Uses single quotes and escapes any single quotes in the string.
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+
+    // If the string contains no special characters, return as-is
+    if s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/') {
+        return s.to_string();
+    }
+
+    // Otherwise, wrap in single quotes and escape any single quotes
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Execute a command inside a VM by writing to the serial console and
 /// reading the output from serial.log.
 ///
 /// Uses a unique marker to delimit command output from other serial noise.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_escape_empty_string() {
+        assert_eq!(shell_escape(""), "''");
+    }
+
+    #[test]
+    fn shell_escape_safe_strings_unchanged() {
+        assert_eq!(shell_escape("hello"), "hello");
+        assert_eq!(shell_escape("foo_bar"), "foo_bar");
+        assert_eq!(shell_escape("file.txt"), "file.txt");
+        assert_eq!(shell_escape("/usr/bin/ls"), "/usr/bin/ls");
+        assert_eq!(shell_escape("a-b"), "a-b");
+    }
+
+    #[test]
+    fn shell_escape_wraps_special_chars() {
+        assert_eq!(shell_escape("hello world"), "'hello world'");
+        assert_eq!(shell_escape("a;b"), "'a;b'");
+        assert_eq!(shell_escape("$(cmd)"), "'$(cmd)'");
+        assert_eq!(shell_escape("a|b"), "'a|b'");
+        assert_eq!(shell_escape("`cmd`"), "'`cmd`'");
+        assert_eq!(shell_escape("a&b"), "'a&b'");
+        assert_eq!(shell_escape("a>b"), "'a>b'");
+    }
+
+    #[test]
+    fn shell_escape_handles_single_quotes() {
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+        assert_eq!(shell_escape("'"), "''\\'''");
+    }
+
+    #[test]
+    fn shell_escape_injection_attempts() {
+        // These should all be safely escaped
+        let dangerous = [
+            "; rm -rf /",
+            "$(cat /etc/passwd)",
+            "`cat /etc/passwd`",
+            "| curl attacker.com",
+            "&& echo pwned",
+            "'; DROP TABLE vms; --",
+        ];
+        for input in dangerous {
+            let escaped = shell_escape(input);
+            // All dangerous inputs contain special chars, so they must be single-quoted
+            assert!(escaped.starts_with('\''), "should be quoted: {input}");
+            assert!(escaped.ends_with('\''), "should be quoted: {input}");
+        }
+    }
+}
+
 fn exec_via_serial(vm_name: &str, command: &[String]) -> Result<()> {
     let serial_path = vm::serial_log_path(vm_name);
     if !serial_path.exists() {
@@ -204,11 +275,17 @@ fn exec_via_serial(vm_name: &str, command: &[String]) -> Result<()> {
 
     let marker_start = format!("NOID_EXEC_{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let marker_end = format!("{marker_start}_END");
-    let cmd_str = command.join(" ");
+
+    // Build command with proper shell escaping to prevent command injection
+    let escaped_cmd = command
+        .iter()
+        .map(|arg| shell_escape(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
 
     // Send command wrapped in echo markers so we can parse the output
     let wrapped = format!(
-        "echo '{marker_start}'; {cmd_str}; echo '{marker_end}'\n"
+        "echo '{marker_start}'; {escaped_cmd}; echo '{marker_end}'\n"
     );
     vm::write_to_serial(vm_name, wrapped.as_bytes())?;
 
@@ -227,7 +304,9 @@ fn exec_via_serial(vm_name: &str, command: &[String]) -> Result<()> {
         if content.len() as u64 <= start_pos {
             continue;
         }
-        let new_output = &content[start_pos as usize..];
+        // Safe conversion: we checked that start_pos <= content.len()
+        let start_offset = start_pos.min(content.len() as u64) as usize;
+        let new_output = &content[start_offset..];
 
         // Look for markers on their own lines (not in the echoed command).
         // Serial console uses \r\n line endings.

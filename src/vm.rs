@@ -367,10 +367,16 @@ fn fc_request(
 
     let mut response = String::new();
     let mut buf = [0u8; 4096];
+    const MAX_RESPONSE_SIZE: usize = 1024 * 1024; // 1 MB max response
     loop {
         match stream.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => response.push_str(&String::from_utf8_lossy(&buf[..n])),
+            Ok(n) => {
+                if response.len() + n > MAX_RESPONSE_SIZE {
+                    bail!("Firecracker API response too large (> 1MB)");
+                }
+                response.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
             Err(e) => return Err(e.into()),
