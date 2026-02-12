@@ -377,9 +377,13 @@ pub fn console_write(handle: &ConsoleHandle, data: &[u8]) -> Result<()> {
     vm::write_to_serial(&handle.vm_dir, data)
 }
 
-/// Open the serial log file for reading, seeked to end.
+/// Open the serial log file for reading, positioned near the end so the
+/// user sees recent output (like the login prompt) immediately on attach.
 pub fn console_open_log(handle: &ConsoleHandle) -> Result<std::fs::File> {
     let mut f = std::fs::File::open(&handle.serial_log)?;
-    f.seek(std::io::SeekFrom::End(0))?;
+    // Seek back up to 4KB from the end to show recent context
+    let len = f.seek(std::io::SeekFrom::End(0))?;
+    let rewind = std::cmp::min(len, 4096);
+    f.seek(std::io::SeekFrom::End(-(rewind as i64)))?;
     Ok(f)
 }

@@ -109,7 +109,7 @@ fn cmd_serve(config_path: &str) -> Result<()> {
 
         if is_upgrade {
             std::thread::spawn(move || {
-                handle_ws_upgrade(request, state, trust_fwd);
+                handle_ws_upgrade(request, state);
             });
         } else {
             std::thread::spawn(move || {
@@ -125,11 +125,27 @@ fn cmd_serve(config_path: &str) -> Result<()> {
 }
 
 fn handle_ws_upgrade(
-    mut request: tiny_http::Request,
+    request: tiny_http::Request,
     state: Arc<ServerState>,
-    trust_fwd: bool,
 ) {
-    let ctx = transport::from_tiny_http(&mut request, trust_fwd);
+    // Parse headers directly — do NOT call from_tiny_http which reads
+    // the request body (blocks forever on upgrade requests with no body).
+    let mut headers = std::collections::HashMap::new();
+    for h in request.headers() {
+        headers.insert(
+            h.field.as_str().as_str().to_lowercase(),
+            h.value.as_str().to_string(),
+        );
+    }
+    let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_default();
+    let ctx = transport::RequestContext {
+        method: request.method().to_string(),
+        path: request.url().to_string(),
+        headers,
+        body: Vec::new(),
+        remote_addr,
+        forwarded_for: None,
+    };
 
     // Authenticate first
     let user = match router::authenticate(&ctx, &state.db, &state.rate_limiter) {
@@ -175,9 +191,15 @@ fn handle_ws_upgrade(
     let vm_name = vm_name.to_string();
     let endpoint = endpoint.to_string();
 
+    eprintln!(
+        "[ws] {} {} WS /v1/vms/{}/{} remote={}",
+        user.name, user.id, vm_name, endpoint,
+        ctx.remote_addr,
+    );
+
     // We need to compute the Sec-WebSocket-Accept header
     let ws_key = ctx.headers.get("sec-websocket-key").cloned().unwrap_or_default();
-    let accept_key = compute_ws_accept(&ws_key);
+    let accept_key = tungstenite::handshake::derive_accept_key(ws_key.as_bytes());
 
     let response = tiny_http::Response::new(
         tiny_http::StatusCode(101),
@@ -197,6 +219,7 @@ fn handle_ws_upgrade(
 
     // Get the underlying TCP stream by upgrading
     let stream = request.upgrade("websocket", response);
+    let ws_start = std::time::Instant::now();
 
     match endpoint.as_str() {
         "console" => {
@@ -210,39 +233,12 @@ fn handle_ws_upgrade(
         }
     }
 
+    eprintln!(
+        "[ws] {} WS /v1/vms/{}/{} closed ({}s)",
+        user.name, vm_name, endpoint,
+        ws_start.elapsed().as_secs(),
+    );
     state.ws_session_count.fetch_sub(1, Ordering::SeqCst);
-}
-
-fn compute_ws_accept(key: &str) -> String {
-    use sha1::{Digest, Sha1};
-    let mut hasher = Sha1::new();
-    hasher.update(key.as_bytes());
-    hasher.update(b"258EAFA5-E914-47DA-95CA-5AB5DC11D65B");
-    base64_encode(&hasher.finalize())
-}
-
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::new();
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        result.push(CHARS[((n >> 18) & 63) as usize] as char);
-        result.push(CHARS[((n >> 12) & 63) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(CHARS[((n >> 6) & 63) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(CHARS[(n & 63) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
 }
 
 // --- User management commands ---
