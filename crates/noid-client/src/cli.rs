@@ -74,6 +74,8 @@ pub enum Command {
         /// VM name (optional if .noid file exists)
         name: Option<String>,
     },
+    /// Update noid to the latest release
+    Update,
     /// Restore a microVM from a checkpoint
     Restore {
         /// VM name (optional if .noid file exists)

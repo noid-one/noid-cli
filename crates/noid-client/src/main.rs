@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod console;
 mod exec;
+mod update;
 
 use anyhow::Result;
 use clap::Parser;
@@ -71,6 +72,10 @@ fn main() -> Result<()> {
         Command::Checkpoints { name } => {
             let name = config::resolve_vm_name(name.as_deref())?;
             cmd_checkpoints(&name)?;
+            0
+        }
+        Command::Update => {
+            update::self_update()?;
             0
         }
         Command::Restore {

@@ -3,6 +3,7 @@ mod console;
 mod handlers;
 mod router;
 mod transport;
+mod update;
 mod ws_exec;
 
 use anyhow::Result;
@@ -48,6 +49,8 @@ enum Command {
         /// Username
         name: String,
     },
+    /// Update noid-server to the latest release
+    Update,
 }
 
 pub struct ServerState {
@@ -67,6 +70,7 @@ fn main() -> Result<()> {
         Command::RotateToken { name } => cmd_rotate_token(&name),
         Command::ListUsers => cmd_list_users(),
         Command::RemoveUser { name } => cmd_remove_user(&name),
+        Command::Update => update::self_update(),
     }
 }
 

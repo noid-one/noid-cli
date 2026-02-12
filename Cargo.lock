@@ -772,6 +772,7 @@ dependencies = [
  "tiny_http",
  "toml",
  "tungstenite",
+ "ureq",
  "uuid",
 ]
 
