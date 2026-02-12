@@ -209,6 +209,8 @@ fn handle_ws_upgrade(
     let response = tiny_http::Response::new(
         tiny_http::StatusCode(101),
         vec![
+            tiny_http::Header::from_bytes(b"Connection", b"Upgrade").unwrap(),
+            tiny_http::Header::from_bytes(b"Upgrade", b"websocket").unwrap(),
             tiny_http::Header::from_bytes(
                 b"Sec-WebSocket-Accept",
                 accept_key.as_bytes(),

@@ -189,8 +189,6 @@ impl ApiClient {
         // connect_timeout uses non-blocking connect internally and may leave
         // the socket in non-blocking mode on some platforms — force blocking.
         stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(timeout))?;
-
         let request = tungstenite::http::Request::builder()
             .uri(&ws_url)
             .header("Host", authority.as_str())
@@ -208,22 +206,12 @@ impl ApiClient {
         let (ws, _) = tungstenite::client::client(request, MaybeTlsStream::Plain(stream))
             .map_err(|e| match e {
                 tungstenite::HandshakeError::Interrupted(_) => {
-                    // read timeout fired (EAGAIN == EWOULDBLOCK on Linux),
-                    // tungstenite misinterprets it as non-blocking IO
-                    anyhow::anyhow!(
-                        "WebSocket handshake timed out \
-                         (server did not respond within {timeout:?})"
-                    )
+                    anyhow::anyhow!("WebSocket handshake interrupted (WouldBlock)")
                 }
                 tungstenite::HandshakeError::Failure(e) => {
                     anyhow::anyhow!("WebSocket handshake failed: {e}")
                 }
             })?;
-
-        // Clear read timeout after successful handshake
-        if let MaybeTlsStream::Plain(s) = ws.get_ref() {
-            let _ = s.set_read_timeout(None);
-        }
 
         Ok(ws)
     }
