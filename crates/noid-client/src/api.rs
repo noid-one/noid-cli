@@ -159,9 +159,60 @@ impl ApiClient {
         format!("{base}{path}")
     }
 
-    pub fn token(&self) -> &str {
-        &self.token
+    /// Connect a WebSocket with a connect/handshake timeout.
+    pub fn ws_connect(
+        &self,
+        path: &str,
+        timeout: std::time::Duration,
+    ) -> Result<tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>>
+    {
+        use std::net::{TcpStream, ToSocketAddrs};
+        use tungstenite::stream::MaybeTlsStream;
+
+        let ws_url = self.ws_url(path);
+        let uri: tungstenite::http::Uri = ws_url.parse().context("invalid WebSocket URL")?;
+        let authority = uri.authority().context("missing authority in URL")?;
+        let host = authority.host();
+        let port = authority
+            .port_u16()
+            .unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
+
+        let addr_str = format!("{host}:{port}");
+        let sock_addr = addr_str
+            .to_socket_addrs()
+            .context("failed to resolve server address")?
+            .next()
+            .context("no addresses found for server")?;
+
+        let stream =
+            TcpStream::connect_timeout(&sock_addr, timeout).context("connection timed out")?;
+        stream.set_read_timeout(Some(timeout))?;
+
+        let request = tungstenite::http::Request::builder()
+            .uri(&ws_url)
+            .header("Host", authority.as_str())
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header(
+                "Sec-WebSocket-Key",
+                tungstenite::handshake::client::generate_key(),
+            )
+            .body(())
+            .context("failed to build WS request")?;
+
+        let (ws, _) = tungstenite::client::client(request, MaybeTlsStream::Plain(stream))
+            .map_err(|e| anyhow::anyhow!("WebSocket handshake failed: {e}"))?;
+
+        // Clear read timeout after successful handshake
+        if let MaybeTlsStream::Plain(s) = ws.get_ref() {
+            let _ = s.set_read_timeout(None);
+        }
+
+        Ok(ws)
     }
+
 }
 
 #[cfg(test)]
@@ -205,12 +256,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn token_returns_stored_token() {
-        let api = ApiClient::new(&ServerSection {
-            url: "http://localhost".into(),
-            token: "noid_tok_abc123".into(),
-        });
-        assert_eq!(api.token(), "noid_tok_abc123");
-    }
 }

@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "noid-client"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -726,7 +726,7 @@ dependencies = [
 
 [[package]]
 name = "noid-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "noid-local"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -761,10 +761,11 @@ dependencies = [
 
 [[package]]
 name = "noid-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "noid-core",
  "noid-types",
  "serde",
@@ -778,7 +779,7 @@ dependencies = [
 
 [[package]]
 name = "noid-types"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",

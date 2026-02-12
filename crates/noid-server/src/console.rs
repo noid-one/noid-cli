@@ -2,6 +2,7 @@ use noid_core::backend;
 use noid_core::db::UserRecord;
 use noid_types::{CHANNEL_STDIN, CHANNEL_STDOUT};
 use std::io::{Read, Write};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tungstenite::protocol::Message;
@@ -13,6 +14,7 @@ pub fn handle_console_ws<S: Read + Write>(
     state: &Arc<ServerState>,
     user: &UserRecord,
     vm_name: &str,
+    remote_addr: Option<SocketAddr>,
 ) {
     let handle = match state.backend.console_attach(&user.id, vm_name) {
         Ok(h) => h,
@@ -27,6 +29,18 @@ pub fn handle_console_ws<S: Read + Write>(
         tungstenite::protocol::Role::Server,
         None,
     );
+
+    // Set the underlying socket to non-blocking so ws.read() returns WouldBlock
+    // instead of blocking forever. The stream from tiny_http's upgrade() is
+    // Box<dyn ReadWrite + Send> with no way to call set_nonblocking() directly,
+    // so we find the socket fd by matching the peer address.
+    if let Some(peer) = remote_addr {
+        if let Some(fd) = find_socket_fd(&peer) {
+            set_fd_nonblocking(fd);
+        } else {
+            eprintln!("[console] warning: could not find socket fd for {peer}, reads will block");
+        }
+    }
 
     // Open serial log for reading
     let mut log_file = match backend::console_open_log(&handle) {
@@ -87,7 +101,7 @@ pub fn handle_console_ws<S: Read + Write>(
             }
         }
 
-        // Check for incoming WS messages (non-blocking via peek)
+        // Check for incoming WS messages (non-blocking via O_NONBLOCK on socket)
         match ws.read() {
             Ok(Message::Binary(data)) => {
                 if data.is_empty() {
@@ -117,4 +131,61 @@ pub fn handle_console_ws<S: Read + Write>(
     running.store(false, std::sync::atomic::Ordering::Relaxed);
     let _ = ws.close(None);
     let _ = reader_thread.join();
+}
+
+/// Find the socket file descriptor for a given peer address by scanning open fds.
+/// This is needed because tiny_http's upgrade() returns Box<dyn ReadWrite + Send>
+/// which doesn't expose the raw fd for set_nonblocking().
+fn find_socket_fd(peer: &SocketAddr) -> Option<i32> {
+    for fd in 3..1024 {
+        unsafe {
+            let mut addr: libc::sockaddr_storage = std::mem::zeroed();
+            let mut len =
+                std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+            if libc::getpeername(
+                fd,
+                &mut addr as *mut _ as *mut libc::sockaddr,
+                &mut len,
+            ) != 0
+            {
+                continue;
+            }
+            let matches = match peer {
+                SocketAddr::V4(v4) => {
+                    if addr.ss_family as i32 != libc::AF_INET {
+                        false
+                    } else {
+                        let sa = &*(&addr as *const _ as *const libc::sockaddr_in);
+                        let port = u16::from_be(sa.sin_port);
+                        let ip =
+                            std::net::Ipv4Addr::from(u32::from_be(sa.sin_addr.s_addr));
+                        port == v4.port() && ip == *v4.ip()
+                    }
+                }
+                SocketAddr::V6(v6) => {
+                    if addr.ss_family as i32 != libc::AF_INET6 {
+                        false
+                    } else {
+                        let sa = &*(&addr as *const _ as *const libc::sockaddr_in6);
+                        let port = u16::from_be(sa.sin6_port);
+                        let ip = std::net::Ipv6Addr::from(sa.sin6_addr.s6_addr);
+                        port == v6.port() && ip == *v6.ip()
+                    }
+                }
+            };
+            if matches {
+                return Some(fd);
+            }
+        }
+    }
+    None
+}
+
+fn set_fd_nonblocking(fd: i32) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags != -1 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
 }

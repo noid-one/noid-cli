@@ -96,7 +96,7 @@ fn cmd_serve(config_path: &str) -> Result<()> {
     let server = tiny_http::Server::http(&config.listen)
         .map_err(|e| anyhow::anyhow!("failed to bind {}: {e}", config.listen))?;
 
-    eprintln!("noid-server listening on {}", config.listen);
+    eprintln!("noid-server v{} listening on {}", env!("CARGO_PKG_VERSION"), config.listen);
 
     for mut request in server.incoming_requests() {
         let state = state.clone();
@@ -155,6 +155,7 @@ fn handle_ws_upgrade(
     let user = match router::authenticate(&ctx, &state.db, &state.rate_limiter) {
         Ok(u) => u,
         Err(resp) => {
+            eprintln!("[ws] auth failed remote={}", ctx.remote_addr);
             let response = transport::to_tiny_http_response(resp);
             let _ = request.respond(response);
             return;
@@ -208,8 +209,6 @@ fn handle_ws_upgrade(
     let response = tiny_http::Response::new(
         tiny_http::StatusCode(101),
         vec![
-            tiny_http::Header::from_bytes(b"Upgrade", b"websocket").unwrap(),
-            tiny_http::Header::from_bytes(b"Connection", b"Upgrade").unwrap(),
             tiny_http::Header::from_bytes(
                 b"Sec-WebSocket-Accept",
                 accept_key.as_bytes(),
@@ -222,12 +221,13 @@ fn handle_ws_upgrade(
     );
 
     // Get the underlying TCP stream by upgrading
+    let peer_addr = request.remote_addr().copied();
     let stream = request.upgrade("websocket", response);
     let ws_start = std::time::Instant::now();
 
     match endpoint.as_str() {
         "console" => {
-            console::handle_console_ws(stream, &state, &user, &vm_name);
+            console::handle_console_ws(stream, &state, &user, &vm_name, peer_addr);
         }
         "exec" => {
             ws_exec::handle_exec_ws(stream, &state, &user, &vm_name);
