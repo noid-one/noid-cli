@@ -60,7 +60,7 @@ pub fn spawn_fc(subvol: &Path) -> Result<(u32, String)> {
 
     let stdin_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
 
-    let child = Command::new(FIRECRACKER_BIN)
+    let mut child = Command::new(FIRECRACKER_BIN)
         .arg("--api-sock")
         .arg(&socket_path)
         .arg("--log-path")
@@ -74,9 +74,17 @@ pub fn spawn_fc(subvol: &Path) -> Result<(u32, String)> {
         .context("failed to spawn firecracker")?;
 
     let pid = child.id();
-    // Detach: let FC run independently. FC inherits the sentinel writer fd,
-    // keeping the FIFO alive indefinitely.
-    std::mem::forget(child);
+
+    // Close the sentinel writer fd in the parent — FC inherits a copy,
+    // so the FIFO stays alive. We must close ours to avoid leaking fds.
+    // Safety: _sentinel_fd is a valid fd we opened above and we no longer need it.
+    unsafe { libc::close(_sentinel_fd) };
+
+    // Spawn a background reaper thread so the child doesn't become a zombie.
+    // We can't just call wait() here (it would block until FC exits).
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 
     wait_for_socket(&socket_path, Duration::from_secs(5))?;
 

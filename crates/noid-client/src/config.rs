@@ -71,3 +71,44 @@ pub fn resolve_vm_name(name: Option<&str>) -> Result<String> {
     }
     read_active_vm().context("no VM specified. Pass a name or run: noid use <name>")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_vm_name_explicit_takes_priority() {
+        assert_eq!(resolve_vm_name(Some("myvm")).unwrap(), "myvm");
+    }
+
+    #[test]
+    fn client_config_parses_toml() {
+        let content = r#"
+            [server]
+            url = "http://localhost:7654"
+            token = "noid_tok_abc"
+        "#;
+        let config: ClientConfig = toml::from_str(content).unwrap();
+        let server = config.server.unwrap();
+        assert_eq!(server.url, "http://localhost:7654");
+        assert_eq!(server.token, "noid_tok_abc");
+    }
+
+    #[test]
+    fn client_config_default_has_no_server() {
+        let config = ClientConfig::default();
+        assert!(config.server.is_none());
+        assert!(config.server().is_err());
+    }
+
+    #[test]
+    fn client_config_server_returns_ref() {
+        let config = ClientConfig {
+            server: Some(ServerSection {
+                url: "http://localhost:7654".into(),
+                token: "tok".into(),
+            }),
+        };
+        assert_eq!(config.server().unwrap().url, "http://localhost:7654");
+    }
+}

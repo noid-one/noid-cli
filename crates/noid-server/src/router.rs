@@ -31,7 +31,7 @@ pub fn authenticate(
         ));
     }
 
-    let db = db.lock().unwrap();
+    let db = db.lock().unwrap_or_else(|e| e.into_inner());
     match db.authenticate_user(token) {
         Ok(Some(user)) => Ok(user),
         Ok(None) => {
@@ -163,6 +163,10 @@ fn route_vm_scoped(
 
     if vm_name.is_empty() {
         return ResponseBuilder::error(400, "missing VM name in path");
+    }
+
+    if noid_core::storage::validate_name(vm_name, "VM").is_err() {
+        return ResponseBuilder::error(400, "invalid VM name");
     }
 
     match (method, sub) {

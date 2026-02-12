@@ -115,3 +115,41 @@ pub fn to_tiny_http_response(
     }
     response
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_builder_json_sets_content_type() {
+        let resp = ResponseBuilder::json(200, &serde_json::json!({"ok": true}));
+        assert_eq!(resp.status, 200);
+        assert!(resp.headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        let parsed: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(parsed["ok"], true);
+    }
+
+    #[test]
+    fn response_builder_error_wraps_in_error_response() {
+        let resp = ResponseBuilder::error(404, "not found");
+        assert_eq!(resp.status, 404);
+        let parsed: noid_types::ErrorResponse = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(parsed.error, "not found");
+    }
+
+    #[test]
+    fn response_builder_no_content_has_empty_body() {
+        let resp = ResponseBuilder::no_content();
+        assert_eq!(resp.status, 204);
+        assert!(resp.body.is_empty());
+        assert!(resp.headers.is_empty());
+    }
+
+    #[test]
+    fn response_builder_json_status_codes() {
+        for code in [200, 201, 400, 401, 409, 500] {
+            let resp = ResponseBuilder::json(code, &serde_json::json!({}));
+            assert_eq!(resp.status, code);
+        }
+    }
+}

@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use noid_types::{CheckpointInfo, ExecResult, VmInfo};
 use std::collections::HashMap;
-use std::io::{Read, Seek};
+use std::io::Seek;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -22,7 +22,6 @@ pub trait VmBackend: Send + Sync {
     fn destroy(&self, user_id: &str, name: &str) -> Result<()>;
     fn get(&self, user_id: &str, name: &str) -> Result<Option<VmInfo>>;
     fn list(&self, user_id: &str) -> Result<Vec<VmInfo>>;
-    fn exec(&self, user_id: &str, name: &str, command: &[String]) -> Result<ExecResult>;
     fn exec_full(
         &self,
         user_id: &str,
@@ -66,11 +65,11 @@ impl FirecrackerBackend {
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, db::Db> {
-        self.db.lock().unwrap()
+        self.db.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn vm_lock(&self, user_id: &str, name: &str) -> Arc<Mutex<()>> {
-        let mut locks = self.vm_locks.lock().unwrap();
+        let mut locks = self.vm_locks.lock().unwrap_or_else(|e| e.into_inner());
         locks
             .entry((user_id.to_string(), name.to_string()))
             .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -78,7 +77,7 @@ impl FirecrackerBackend {
     }
 
     fn remove_vm_lock(&self, user_id: &str, name: &str) {
-        let mut locks = self.vm_locks.lock().unwrap();
+        let mut locks = self.vm_locks.lock().unwrap_or_else(|e| e.into_inner());
         locks.remove(&(user_id.to_string(), name.to_string()));
     }
 
@@ -173,7 +172,7 @@ impl VmBackend for FirecrackerBackend {
 
     fn destroy(&self, user_id: &str, name: &str) -> Result<()> {
         let lock = self.vm_lock(user_id, name);
-        let guard = lock.lock().unwrap();
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let vm_rec = self
             .db()
@@ -203,11 +202,6 @@ impl VmBackend for FirecrackerBackend {
         Ok(vms.iter().map(Self::vm_to_info).collect())
     }
 
-    fn exec(&self, user_id: &str, name: &str, command: &[String]) -> Result<ExecResult> {
-        let (_stdout, result) = self.exec_full(user_id, name, command)?;
-        Ok(result)
-    }
-
     fn exec_full(
         &self,
         user_id: &str,
@@ -219,7 +213,7 @@ impl VmBackend for FirecrackerBackend {
             .ok_or_else(|| anyhow::anyhow!("VM '{name}' not found"))?;
 
         let lock = self.vm_lock(user_id, name);
-        let _guard = lock.lock().unwrap();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let dir = storage::vm_dir(user_id, name);
         let (stdout, exit_code, timed_out, truncated) =
@@ -242,14 +236,14 @@ impl VmBackend for FirecrackerBackend {
         label: Option<&str>,
     ) -> Result<CheckpointInfo> {
         let lock = self.vm_lock(user_id, name);
-        let _guard = lock.lock().unwrap();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let rec = self
             .db()
             .get_vm(user_id, name)?
             .ok_or_else(|| anyhow::anyhow!("VM '{name}' not found"))?;
 
-        let checkpoint_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        let checkpoint_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..16].to_string();
 
         vm::pause_vm(&rec.socket_path)?;
         let subvol = storage::vm_dir(user_id, name);
@@ -376,11 +370,6 @@ impl VmBackend for FirecrackerBackend {
             vm_dir: dir,
         })
     }
-}
-
-/// Read new bytes from a console handle's serial log.
-pub fn console_read(file: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
-    file.read(buf)
 }
 
 /// Write bytes to a console handle's serial input.

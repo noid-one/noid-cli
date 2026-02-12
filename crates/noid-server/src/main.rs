@@ -162,14 +162,15 @@ fn handle_ws_upgrade(
         }
     };
 
-    // Check WS session limit
-    let current = state.ws_session_count.load(Ordering::Relaxed);
-    if current >= state.config.max_ws_sessions {
+    // Check WS session limit: atomically increment, then check.
+    // If we exceeded the limit, decrement and reject.
+    let prev = state.ws_session_count.fetch_add(1, Ordering::SeqCst);
+    if prev >= state.config.max_ws_sessions {
+        state.ws_session_count.fetch_sub(1, Ordering::SeqCst);
         let resp = transport::ResponseBuilder::error(503, "too many WebSocket sessions");
         let _ = request.respond(transport::to_tiny_http_response(resp));
         return;
     }
-    state.ws_session_count.fetch_add(1, Ordering::Relaxed);
 
     let vm_name = vm_name.to_string();
     let endpoint = endpoint.to_string();
@@ -209,7 +210,7 @@ fn handle_ws_upgrade(
         }
     }
 
-    state.ws_session_count.fetch_sub(1, Ordering::Relaxed);
+    state.ws_session_count.fetch_sub(1, Ordering::SeqCst);
 }
 
 fn compute_ws_accept(key: &str) -> String {

@@ -1,6 +1,6 @@
 [package]
 name = "noid-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -15,3 +15,4 @@ anyhow = "1"
 rand = "0.8"
 sha2 = "0.10"
 subtle = "2"
+libc = "0.2"

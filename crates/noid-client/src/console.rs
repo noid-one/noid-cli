@@ -13,9 +13,12 @@ use crate::api::ApiClient;
 
 pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
     let url = api.ws_url(&format!("/v1/vms/{vm_name}/console"));
+    let uri: tungstenite::http::Uri = url.parse().context("invalid WebSocket URL")?;
+    let host = uri.authority().map(|a| a.as_str()).unwrap_or("localhost");
 
     let request = tungstenite::http::Request::builder()
         .uri(&url)
+        .header("Host", host)
         .header("Authorization", format!("Bearer {}", api.token()))
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")

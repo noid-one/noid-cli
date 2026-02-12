@@ -163,3 +163,54 @@ impl ApiClient {
         &self.token
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ServerSection;
+
+    #[test]
+    fn ws_url_converts_http_to_ws() {
+        let api = ApiClient::new(&ServerSection {
+            url: "http://localhost:7654".into(),
+            token: "noid_tok_test".into(),
+        });
+        assert_eq!(
+            api.ws_url("/v1/vms/test/console"),
+            "ws://localhost:7654/v1/vms/test/console"
+        );
+    }
+
+    #[test]
+    fn ws_url_converts_https_to_wss() {
+        let api = ApiClient::new(&ServerSection {
+            url: "https://noid.example.com".into(),
+            token: "noid_tok_test".into(),
+        });
+        assert_eq!(
+            api.ws_url("/v1/vms/test/exec"),
+            "wss://noid.example.com/v1/vms/test/exec"
+        );
+    }
+
+    #[test]
+    fn base_url_strips_trailing_slash() {
+        let api = ApiClient::new(&ServerSection {
+            url: "http://localhost:7654/".into(),
+            token: "noid_tok_test".into(),
+        });
+        assert_eq!(
+            api.ws_url("/v1/vms/test/console"),
+            "ws://localhost:7654/v1/vms/test/console"
+        );
+    }
+
+    #[test]
+    fn token_returns_stored_token() {
+        let api = ApiClient::new(&ServerSection {
+            url: "http://localhost:7654".into(),
+            token: "noid_tok_abc123".into(),
+        });
+        assert_eq!(api.token(), "noid_tok_abc123");
+    }
+}

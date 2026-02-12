@@ -5,6 +5,21 @@ use crate::router::AuthenticatedRequest;
 use crate::transport::ResponseBuilder;
 use crate::ServerState;
 
+/// Map a backend error to an HTTP response. Known error patterns (not found,
+/// already exists) get specific status codes with the message passed through.
+/// Unknown errors get a generic 500 — details are logged server-side only.
+fn map_backend_error(e: &anyhow::Error) -> ResponseBuilder {
+    let msg = e.to_string();
+    if msg.contains("not found") {
+        ResponseBuilder::error(404, &msg)
+    } else if msg.contains("already exists") {
+        ResponseBuilder::error(409, &msg)
+    } else {
+        eprintln!("internal error: {e:#}");
+        ResponseBuilder::error(500, "internal server error")
+    }
+}
+
 pub fn healthz() -> ResponseBuilder {
     ResponseBuilder::json(200, &serde_json::json!({"status": "ok"}))
 }
@@ -52,21 +67,14 @@ pub fn create_vm(req: AuthenticatedRequest, state: &Arc<ServerState>) -> Respons
 
     match state.backend.create(&req.user.id, &body.name, body.cpus, body.mem_mib) {
         Ok(info) => ResponseBuilder::json(201, &info),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("already exists") {
-                ResponseBuilder::error(409, &msg)
-            } else {
-                ResponseBuilder::error(500, &msg)
-            }
-        }
+        Err(e) => map_backend_error(&e),
     }
 }
 
 pub fn list_vms(req: &AuthenticatedRequest, state: &Arc<ServerState>) -> ResponseBuilder {
     match state.backend.list(&req.user.id) {
         Ok(vms) => ResponseBuilder::json(200, &vms),
-        Err(e) => ResponseBuilder::error(500, &e.to_string()),
+        Err(e) => map_backend_error(&e),
     }
 }
 
@@ -78,7 +86,7 @@ pub fn get_vm(
     match state.backend.get(&req.user.id, name) {
         Ok(Some(info)) => ResponseBuilder::json(200, &info),
         Ok(None) => ResponseBuilder::error(404, &format!("VM '{name}' not found")),
-        Err(e) => ResponseBuilder::error(500, &e.to_string()),
+        Err(e) => map_backend_error(&e),
     }
 }
 
@@ -90,11 +98,10 @@ pub fn destroy_vm(
     match state.backend.destroy(&req.user.id, name) {
         Ok(()) => ResponseBuilder::no_content(),
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") {
+            if e.to_string().contains("not found") {
                 ResponseBuilder::no_content()
             } else {
-                ResponseBuilder::error(500, &msg)
+                map_backend_error(&e)
             }
         }
     }
@@ -115,14 +122,7 @@ pub fn create_checkpoint(
         .checkpoint(&req.user.id, name, body.label.as_deref())
     {
         Ok(info) => ResponseBuilder::json(201, &info),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                ResponseBuilder::error(404, &msg)
-            } else {
-                ResponseBuilder::error(500, &msg)
-            }
-        }
+        Err(e) => map_backend_error(&e),
     }
 }
 
@@ -133,7 +133,7 @@ pub fn list_checkpoints(
 ) -> ResponseBuilder {
     match state.backend.list_checkpoints(&req.user.id, name) {
         Ok(cps) => ResponseBuilder::json(200, &cps),
-        Err(e) => ResponseBuilder::error(500, &e.to_string()),
+        Err(e) => map_backend_error(&e),
     }
 }
 
@@ -154,16 +154,7 @@ pub fn restore_vm(
         body.new_name.as_deref(),
     ) {
         Ok(info) => ResponseBuilder::json(200, &info),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("already exists") {
-                ResponseBuilder::error(409, &msg)
-            } else if msg.contains("not found") {
-                ResponseBuilder::error(404, &msg)
-            } else {
-                ResponseBuilder::error(500, &msg)
-            }
-        }
+        Err(e) => map_backend_error(&e),
     }
 }
 
@@ -191,13 +182,52 @@ pub fn exec_vm(
                 truncated: result.truncated,
             },
         ),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                ResponseBuilder::error(404, &msg)
-            } else {
-                ResponseBuilder::error(500, &msg)
-            }
-        }
+        Err(e) => map_backend_error(&e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn healthz_returns_200() {
+        let resp = healthz();
+        assert_eq!(resp.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(body["status"], "ok");
+    }
+
+    #[test]
+    fn version_returns_api_version_1() {
+        let resp = version();
+        assert_eq!(resp.status, 200);
+        let body: VersionInfo = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(body.api_version, 1);
+        assert!(!body.version.is_empty());
+    }
+
+    #[test]
+    fn map_backend_error_not_found_gives_404() {
+        let err = anyhow::anyhow!("VM 'test' not found");
+        let resp = map_backend_error(&err);
+        assert_eq!(resp.status, 404);
+    }
+
+    #[test]
+    fn map_backend_error_already_exists_gives_409() {
+        let err = anyhow::anyhow!("VM 'test' already exists");
+        let resp = map_backend_error(&err);
+        assert_eq!(resp.status, 409);
+    }
+
+    #[test]
+    fn map_backend_error_unknown_gives_generic_500() {
+        let err = anyhow::anyhow!("disk I/O failure at /secret/path");
+        let resp = map_backend_error(&err);
+        assert_eq!(resp.status, 500);
+        let body: ErrorResponse = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(body.error, "internal server error");
+        assert!(!body.error.contains("/secret/path"));
     }
 }

@@ -144,12 +144,14 @@ impl Db {
         }
     }
 
-    /// Find user by verifying token against all stored hashes.
+    /// Find user by hashing the token and looking up the hash directly.
+    /// SHA-256 is deterministic, so we can do an O(1) lookup by hash.
     pub fn authenticate_user(&self, token: &str) -> Result<Option<UserRecord>> {
+        let token_hash = crate::auth::hash_token(token);
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, token_hash, created_at FROM users",
+            "SELECT id, name, token_hash, created_at FROM users WHERE token_hash = ?1",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let mut rows = stmt.query_map(params![token_hash], |row| {
             Ok(UserRecord {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -157,13 +159,10 @@ impl Db {
                 created_at: row.get(3)?,
             })
         })?;
-        for row in rows {
-            let user = row?;
-            if crate::auth::verify_token(&user.token_hash, token) {
-                return Ok(Some(user));
-            }
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
         }
-        Ok(None)
     }
 
     pub fn list_users(&self) -> Result<Vec<UserRecord>> {

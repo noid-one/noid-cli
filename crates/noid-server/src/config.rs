@@ -40,4 +40,59 @@ impl ServerConfig {
             .map_err(|e| anyhow::anyhow!("failed to parse config file '{path}': {e}"))?;
         Ok(config)
     }
+
+    pub fn from_str(content: &str) -> anyhow::Result<Self> {
+        toml::from_str(content).map_err(|e| anyhow::anyhow!("failed to parse config: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_minimal_config() {
+        let cfg = ServerConfig::from_str(
+            r#"
+            kernel = "/path/to/vmlinux.bin"
+            rootfs = "/path/to/rootfs.ext4"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.listen, "127.0.0.1:7654");
+        assert_eq!(cfg.kernel, "/path/to/vmlinux.bin");
+        assert_eq!(cfg.rootfs, "/path/to/rootfs.ext4");
+        assert_eq!(cfg.max_ws_sessions, 32);
+        assert!(!cfg.trust_forwarded_for);
+        assert_eq!(cfg.exec_timeout_secs, 30);
+        assert_eq!(cfg.console_timeout_secs, 3600);
+    }
+
+    #[test]
+    fn parse_full_config() {
+        let cfg = ServerConfig::from_str(
+            r#"
+            listen = "0.0.0.0:8080"
+            kernel = "/k"
+            rootfs = "/r"
+            max_ws_sessions = 64
+            trust_forwarded_for = true
+            exec_timeout_secs = 60
+            console_timeout_secs = 7200
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.listen, "0.0.0.0:8080");
+        assert_eq!(cfg.max_ws_sessions, 64);
+        assert!(cfg.trust_forwarded_for);
+        assert_eq!(cfg.exec_timeout_secs, 60);
+        assert_eq!(cfg.console_timeout_secs, 7200);
+    }
+
+    #[test]
+    fn parse_missing_required_field() {
+        // kernel and rootfs are required
+        let result = ServerConfig::from_str(r#"listen = "127.0.0.1:7654""#);
+        assert!(result.is_err());
+    }
 }

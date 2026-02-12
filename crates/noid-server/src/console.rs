@@ -39,7 +39,6 @@ pub fn handle_console_ws<S: Read + Write>(
     };
 
     // Set up a reader thread to tail serial.log → WS
-    let handle_clone = Arc::new(handle);
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let running_r = running.clone();
 
@@ -95,7 +94,7 @@ pub fn handle_console_ws<S: Read + Write>(
                     continue;
                 }
                 if data[0] == CHANNEL_STDIN {
-                    if let Err(e) = backend::console_write(&handle_clone, &data[1..]) {
+                    if let Err(e) = backend::console_write(&handle, &data[1..]) {
                         eprintln!("serial write error: {e}");
                         break;
                     }

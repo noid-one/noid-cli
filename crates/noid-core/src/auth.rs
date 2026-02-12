@@ -93,7 +93,7 @@ impl RateLimiter {
 
     /// Check if a key is rate-limited. Returns Err if blocked.
     pub fn check(&self, key: &str) -> Result<()> {
-        let mut map = self.entries.lock().unwrap();
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = map.get(key) {
             if entry.window_start.elapsed().as_secs() > WINDOW_SECS {
                 map.remove(key);
@@ -108,7 +108,7 @@ impl RateLimiter {
 
     /// Record an authentication failure for a key.
     pub fn record_failure(&self, key: &str) {
-        let mut map = self.entries.lock().unwrap();
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let entry = map.entry(key.to_string()).or_insert(RateEntry {
             failures: 0,
             window_start: Instant::now(),

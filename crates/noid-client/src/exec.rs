@@ -7,9 +7,12 @@ use crate::api::ApiClient;
 
 pub fn exec_ws(api: &ApiClient, vm_name: &str, command: &[String]) -> Result<i32> {
     let url = api.ws_url(&format!("/v1/vms/{vm_name}/exec"));
+    let uri: tungstenite::http::Uri = url.parse().context("invalid WebSocket URL")?;
+    let host = uri.authority().map(|a| a.as_str()).unwrap_or("localhost");
 
     let request = tungstenite::http::Request::builder()
         .uri(&url)
+        .header("Host", host)
         .header("Authorization", format!("Bearer {}", api.token()))
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
