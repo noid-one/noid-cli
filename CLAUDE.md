@@ -115,7 +115,7 @@ WS frames use 1-byte channel prefix: `0x01`=stdout, `0x02`=stderr, `0x03`=stdin.
 ### Server Config (server.toml)
 
 ```toml
-listen = "127.0.0.1:7654"
+listen = "0.0.0.0:80"
 kernel = "/path/to/vmlinux.bin"
 rootfs = "/path/to/rootfs.ext4"
 max_ws_sessions = 32
@@ -128,7 +128,7 @@ console_timeout_secs = 3600
 
 ```toml
 [server]
-url = "http://127.0.0.1:7654"
+url = "http://your-server"
 token = "noid_tok_..."
 ```
 
@@ -178,5 +178,5 @@ Three tables:
 
 ## Test Images
 
-- Kernel: `/home/firecracker/vmlinux.bin`
-- Rootfs: `/home/firecracker/rootfs.ext4`
+- Kernel: `~/vmlinux.bin`
+- Rootfs: `~/rootfs.ext4`

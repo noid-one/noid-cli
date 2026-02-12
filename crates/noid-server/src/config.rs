@@ -17,7 +17,7 @@ pub struct ServerConfig {
 }
 
 fn default_listen() -> String {
-    "127.0.0.1:7654".to_string()
+    "0.0.0.0:80".to_string()
 }
 
 fn default_max_ws_sessions() -> usize {
@@ -59,7 +59,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(cfg.listen, "127.0.0.1:7654");
+        assert_eq!(cfg.listen, "0.0.0.0:80");
         assert_eq!(cfg.kernel, "/path/to/vmlinux.bin");
         assert_eq!(cfg.rootfs, "/path/to/rootfs.ext4");
         assert_eq!(cfg.max_ws_sessions, 32);
@@ -72,7 +72,7 @@ mod tests {
     fn parse_full_config() {
         let cfg = ServerConfig::from_str(
             r#"
-            listen = "0.0.0.0:8080"
+            listen = "0.0.0.0:9999"
             kernel = "/k"
             rootfs = "/r"
             max_ws_sessions = 64
@@ -82,7 +82,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(cfg.listen, "0.0.0.0:8080");
+        assert_eq!(cfg.listen, "0.0.0.0:9999");
         assert_eq!(cfg.max_ws_sessions, 64);
         assert!(cfg.trust_forwarded_for);
         assert_eq!(cfg.exec_timeout_secs, 60);
@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn parse_missing_required_field() {
         // kernel and rootfs are required
-        let result = ServerConfig::from_str(r#"listen = "127.0.0.1:7654""#);
+        let result = ServerConfig::from_str(r#"listen = "0.0.0.0:80""#);
         assert!(result.is_err());
     }
 }

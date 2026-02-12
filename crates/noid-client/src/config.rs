@@ -85,12 +85,12 @@ mod tests {
     fn client_config_parses_toml() {
         let content = r#"
             [server]
-            url = "http://localhost:7654"
+            url = "http://localhost"
             token = "noid_tok_abc"
         "#;
         let config: ClientConfig = toml::from_str(content).unwrap();
         let server = config.server.unwrap();
-        assert_eq!(server.url, "http://localhost:7654");
+        assert_eq!(server.url, "http://localhost");
         assert_eq!(server.token, "noid_tok_abc");
     }
 
@@ -105,10 +105,10 @@ mod tests {
     fn client_config_server_returns_ref() {
         let config = ClientConfig {
             server: Some(ServerSection {
-                url: "http://localhost:7654".into(),
+                url: "http://localhost".into(),
                 token: "tok".into(),
             }),
         };
-        assert_eq!(config.server().unwrap().url, "http://localhost:7654");
+        assert_eq!(config.server().unwrap().url, "http://localhost");
     }
 }

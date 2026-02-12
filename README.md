@@ -2,256 +2,212 @@
 
 A CLI for managing Firecracker microVMs with instant checkpointing and restore.
 
-Create VMs in one command. Checkpoint them instantly. Clone and restore from any checkpoint. Inspired by [Fly.io Sprites](https://sprites.dev).
+Create VMs in one command. Checkpoint them instantly. Clone and restore from any checkpoint.
 
-## Prerequisites
-
-- Linux host with KVM support (`/dev/kvm` accessible)
-- [Firecracker](https://github.com/firecracker-microvm/firecracker) installed at `/usr/local/bin/firecracker`
-- A Linux kernel image (`vmlinux`) and root filesystem (`rootfs.ext4`)
-- Rust toolchain (to build from source)
-
-Optional: btrfs-progs for instant copy-on-write snapshots. Without btrfs, noid falls back to regular file copies — everything still works, just slower for large rootfs images.
+noid runs as a **client-server** system: `noid-server` manages Firecracker VMs on a Linux host, and `noid` is a CLI client that talks to the server over HTTP and WebSocket. The client can run from anywhere.
 
 ## Install
 
+Download the latest release:
+
 ```bash
-git clone <repo-url> && cd noid
-cargo build --release
-cp target/release/noid /usr/local/bin/
+mkdir -p ~/.local/bin
+
+# Client (run from anywhere)
+curl -fsSL -o ~/.local/bin/noid \
+  https://github.com/noid-one/noid-cli/releases/latest/download/noid
+chmod +x ~/.local/bin/noid
+
+# Server (run on the VM host)
+curl -fsSL -o ~/.local/bin/noid-server \
+  https://github.com/noid-one/noid-cli/releases/latest/download/noid-server
+chmod +x ~/.local/bin/noid-server
 ```
 
-## Quick start
+Make sure `~/.local/bin` is in your `PATH`. Both binaries can update themselves:
+
+```bash
+noid update
+noid-server update
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/noid-one/noid-cli.git && cd noid-cli
+cargo build --release --workspace
+cp target/release/noid target/release/noid-server ~/.local/bin/
+```
+
+## Server setup
+
+The server needs a Linux host with KVM support (`/dev/kvm`), Firecracker installed at `/usr/local/bin/firecracker`, and a kernel + rootfs image.
 
 ### 1. Get a kernel and rootfs
 
-Download the Firecracker quickstart images:
-
 ```bash
-# Kernel
-curl -fsSL -o vmlinux.bin \
+curl -fsSL -o ~/vmlinux.bin \
   "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
 
-# Root filesystem (Ubuntu 18.04)
-curl -fsSL -o rootfs.ext4 \
+curl -fsSL -o ~/rootfs.ext4 \
   "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/rootfs/bionic.rootfs.ext4"
 ```
 
-### 2. Configure defaults
+### 2. Configure and start the server
 
-Set these once. Every `noid create` after this uses them automatically:
+Edit `server.toml` to point to your images:
 
-```bash
-noid config set kernel /path/to/vmlinux.bin
-noid config set rootfs /path/to/rootfs.ext4
+```toml
+kernel = "/home/youruser/vmlinux.bin"
+rootfs = "/home/youruser/rootfs.ext4"
+
+# listen = "0.0.0.0:80"         # default: binds all interfaces on port 80
 ```
 
-### 3. Create a VM
+See `server.toml.example` for all options.
+
+Port 80 requires root. To run without root, use a higher port (e.g. `listen = "0.0.0.0:8080"`).
+
+```bash
+noid-server serve --config server.toml
+```
+
+### 3. Add a user
+
+```bash
+noid-server add-user alice
+```
+
+This prints an API token (`noid_tok_...`). Save it — it can't be retrieved later.
+
+## Client setup
+
+From any machine (local or remote), configure the client to point at the server:
+
+```bash
+noid auth setup --url http://your-server --token noid_tok_...
+```
+
+Verify the connection:
+
+```bash
+noid whoami
+# User: alice
+# ID:   a1b2c3d4-...
+```
+
+## Usage
+
+### Create a VM
 
 ```bash
 noid create my-vm
-```
+# VM 'my-vm' created (state: running)
 
-That's it. The VM boots in the background. You can override defaults per-VM:
-
-```bash
 noid create beefy-vm --cpus 4 --mem 512
 ```
 
-### 4. Run commands inside the VM
+### Run commands
 
 ```bash
-noid exec my-vm -- uname -a
-# Linux ubuntu-fc-uvm 4.14.174 #2 SMP ... x86_64 GNU/Linux
-
-noid exec my-vm -- cat /etc/os-release
-# NAME="Ubuntu"
-# VERSION="18.04.5 LTS (Bionic Beaver)"
-# ...
+noid exec --name my-vm -- uname -a
+# Linux ubuntu-fc-uvm 4.14.174 ...
 ```
 
-### 5. Attach to the serial console
+Set an active VM to skip `--name`:
+
+```bash
+noid use my-vm
+noid exec -- cat /etc/os-release
+```
+
+### Interactive console
 
 ```bash
 noid console my-vm
 ```
 
-This gives you a live, interactive terminal session inside the VM. Type commands, see output. Press **Ctrl+Q** to detach (the VM keeps running).
+Press **Ctrl+Q** to detach (the VM keeps running).
 
-### 6. Checkpoint a VM
-
-Capture the full state of a running VM — memory, CPU registers, disk — in one command:
+### Checkpoint and restore
 
 ```bash
-noid checkpoint my-vm --label before-deploy
-```
+# Snapshot a running VM
+noid checkpoint --name my-vm --label before-deploy
 
-This pauses the VM, snapshots everything, and resumes it. Downtime is typically under a second.
-
-### 7. List checkpoints
-
-```bash
+# List checkpoints
 noid checkpoints my-vm
-# +----------+---------------+---------------------+
-# | id       | label         | created             |
-# +----------+---------------+---------------------+
-# | a1b2c3d4 | before-deploy | 2026-02-10 23:06:54 |
-# +----------+---------------+---------------------+
+
+# Clone from a checkpoint into a new VM
+noid restore --name my-vm a1b2c3d4 --as my-vm-copy
+
+# Or restore in-place (replaces the current VM)
+noid restore --name my-vm a1b2c3d4
 ```
 
-### 8. Restore from a checkpoint
+On btrfs, checkpoints and clones are instant (zero-copy). On ext4, they fall back to regular file copies.
 
-Clone a checkpoint into a brand new VM:
-
-```bash
-noid restore my-vm a1b2c3d4 --as my-vm-copy
-```
-
-The new VM starts from the exact state captured in the checkpoint — same memory contents, same running processes, same filesystem. On btrfs, the clone is instant (zero-copy).
-
-You can also restore in-place, which destroys the current VM and replaces it:
-
-```bash
-noid restore my-vm a1b2c3d4
-```
-
-### 9. List running VMs
+### List and destroy
 
 ```bash
 noid list
-# +------------+---------+-------+------+-----------+---------------------+
-# | name       | state   | pid   | cpus | mem (MiB) | created             |
-# +------------+---------+-------+------+-----------+---------------------+
-# | my-vm      | running | 12345 | 1    | 128       | 2026-02-10 23:06:12 |
-# +------------+---------+-------+------+-----------+---------------------+
-# | my-vm-copy | running | 12390 | 1    | 128       | 2026-02-10 23:07:04 |
-# +------------+---------+-------+------+-----------+---------------------+
-```
-
-The state column shows `running` if the Firecracker process is alive, or `dead` if it has exited.
-
-### 10. Destroy a VM
-
-```bash
+noid info my-vm
 noid destroy my-vm
-noid destroy my-vm-copy
 ```
-
-Kills the Firecracker process, removes the VM's storage directory, and cleans up the database entry.
 
 ## Command reference
 
+### Client (`noid`)
+
 | Command | Description |
 |---------|-------------|
-| `noid create <name> [--kernel PATH] [--rootfs PATH] [--cpus N] [--mem MiB]` | Create and boot a new microVM |
-| `noid destroy <name>` | Stop and remove a microVM |
-| `noid list` | List all microVMs with status |
-| `noid exec <name> -- <command...>` | Run a command inside a VM via serial console |
-| `noid console <name>` | Attach interactive serial console (Ctrl+Q to detach) |
-| `noid checkpoint <name> [--label TEXT]` | Snapshot a running VM |
-| `noid checkpoints <name>` | List snapshots for a VM |
-| `noid restore <name> <checkpoint-id> [--as NEW_NAME]` | Restore a VM from a snapshot |
-| `noid config set <key> <value>` | Set a default (keys: `kernel`, `rootfs`) |
+| `noid auth setup --url URL --token TOKEN` | Configure server connection |
+| `noid whoami` | Show authenticated user info |
+| `noid current` | Show active server and VM |
+| `noid use <name>` | Set active VM for this directory |
+| `noid create <name> [--cpus N] [--mem MiB]` | Create and boot a new VM |
+| `noid destroy [name]` | Stop and remove a VM |
+| `noid list` | List all VMs |
+| `noid info [name]` | Show VM details |
+| `noid exec [--name NAME] -- <command...>` | Run a command inside a VM |
+| `noid console [name]` | Interactive serial console (Ctrl+Q to detach) |
+| `noid checkpoint [--name NAME] [--label TEXT]` | Snapshot a running VM |
+| `noid checkpoints [name]` | List checkpoints |
+| `noid restore [--name NAME] <id> [--as NEW]` | Restore from checkpoint |
+| `noid update` | Update noid to the latest release |
 
-## How it works
+### Server (`noid-server`)
 
-### Storage layout
-
-```
-~/.noid/
-  config.toml          # default kernel/rootfs paths
-  noid.db              # SQLite — VM and checkpoint metadata
-  storage/
-    vms/
-      my-vm/
-        rootfs.ext4    # copy of base rootfs (reflink on btrfs)
-        serial.log     # VM serial console output (FC stdout)
-        serial.in      # named FIFO for serial input (FC stdin)
-        firecracker.sock
-        firecracker.log
-    checkpoints/
-      my-vm/
-        a1b2c3d4/      # snapshot of the VM directory
-          rootfs.ext4
-          memory.snap   # Firecracker memory snapshot
-          vmstate.snap  # Firecracker CPU/device state
-          serial.log
-```
-
-### VM lifecycle
-
-**Create** spawns a Firecracker process in the background, configures it via the HTTP API over a Unix socket (machine config, boot source, root drive), and starts the instance. The Firecracker process is orphaned — it keeps running after `noid` exits.
-
-**Exec** sends commands through the serial console. It writes to a named FIFO (`serial.in`) connected to Firecracker's stdin, and reads output from `serial.log` (Firecracker's stdout). Unique markers delimit command output from other serial noise.
-
-**Console** is a bidirectional pipe bridge: a reader thread tails `serial.log` to your terminal, while the main thread captures keystrokes and writes them to the FIFO.
-
-### Checkpoint flow
-
-```
-noid checkpoint my-vm
-  1. Pause the VM (PATCH /vm → Paused)
-  2. Create Firecracker snapshot (PUT /snapshot/create → memory.snap + vmstate.snap)
-  3. Copy the entire VM directory (btrfs read-only snapshot, or cp -a)
-  4. Resume the VM (PATCH /vm → Resumed)
-```
-
-### Restore flow
-
-```
-noid restore my-vm a1b2c3d4 --as my-vm-copy
-  1. Clone the checkpoint directory (btrfs writable snapshot, or cp -a)
-  2. Spawn a new Firecracker process
-  3. Load the snapshot (PUT /snapshot/load → memory.snap + vmstate.snap)
-  4. VM resumes from the exact captured state
-```
-
-On btrfs, steps 1 and 3 in the checkpoint flow are instant zero-copy operations. On ext4, they fall back to regular copies.
-
-### btrfs vs ext4
-
-noid auto-detects the filesystem:
-
-| | btrfs | ext4 / other |
-|---|---|---|
-| Create rootfs | reflink copy (instant, zero disk) | regular copy |
-| Checkpoint | read-only snapshot (instant) | `cp -a` (copies everything) |
-| Restore clone | writable snapshot (instant) | `cp -a` (copies everything) |
-| Delete | `btrfs subvolume delete` | `rm -rf` |
-
-To use btrfs, mount a btrfs filesystem at `~/.noid/storage/` before running `noid create`. If noid has root access, it can auto-create a btrfs loopback image.
+| Command | Description |
+|---------|-------------|
+| `noid-server serve --config PATH` | Start the server |
+| `noid-server add-user <name>` | Create a user and print their token |
+| `noid-server rotate-token <name>` | Rotate a user's token |
+| `noid-server list-users` | List all users |
+| `noid-server remove-user <name>` | Remove a user and all their data |
+| `noid-server update` | Update noid-server to the latest release |
 
 ## Architecture
 
 ```
-src/
-  main.rs      # CLI dispatch, exec implementation
-  cli.rs       # clap derive structs (9 commands)
-  config.rs    # ~/.noid/config.toml management
-  db.rs        # SQLite schema, VM/checkpoint CRUD
-  storage.rs   # btrfs/ext4 storage operations
-  vm.rs        # Firecracker process + HTTP API client
-  console.rs   # bidirectional serial console bridge
+noid (client)  ──HTTP/WS──>  noid-server  ──unix socket──>  firecracker
+   any machine                 VM host                       microVM
 ```
 
-No async runtime needed at the binary level — Firecracker is managed via synchronous Unix socket HTTP calls and process spawning. The `tokio` dependency exists for future extensions.
+- REST API for lifecycle operations (create, destroy, list, checkpoint, restore)
+- WebSocket for interactive sessions (console, exec)
+- Token auth with SHA-256 hashed tokens and constant-time verification
+- Multi-tenant: users are isolated at the DB and filesystem level
+- No async runtime — fully synchronous (tiny_http + tungstenite + ureq)
 
-## Troubleshooting
+### Workspace crates
 
-**"kernel not found" or "rootfs not found"**
-Run `noid config set kernel /path/to/vmlinux.bin` and `noid config set rootfs /path/to/rootfs.ext4`.
+| Crate | Purpose |
+|-------|---------|
+| `noid-client` | CLI binary (`noid`) |
+| `noid-server` | Server binary (`noid-server`) |
+| `noid-core` | VM engine: DB, storage, exec, auth |
+| `noid-types` | Shared wire types (serde structs) |
+| `noid-local` | Legacy standalone CLI (pre-client-server) |
 
-**"failed to spawn firecracker"**
-Ensure Firecracker is installed at `/usr/local/bin/firecracker` and is executable.
-
-**"timed out waiting for socket"**
-Firecracker failed to start. Check `~/.noid/storage/vms/<name>/firecracker.log` for errors.
-
-**VM shows as "dead" in `noid list`**
-The Firecracker process exited. Check the log file. Common causes: KVM not available, bad kernel/rootfs, insufficient memory.
-
-**`noid exec` times out**
-The VM may not have finished booting. Wait a few seconds after `noid create` and try again. Also ensure the rootfs has a shell at the default login.
-
-**Checkpoint fails with "not running"**
-The VM's Firecracker process must be alive and the VM must be in the `Running` state to create a checkpoint.
+See [docs/server-guide.md](docs/server-guide.md) and [docs/client-guide.md](docs/client-guide.md) for detailed guides.

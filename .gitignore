@@ -1,1 +1,6 @@
 /target
+*.db
+.noid
+.env
+*.snap
+storage.img

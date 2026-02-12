@@ -35,29 +35,33 @@ Download the Firecracker quickstart images:
 
 ```bash
 # Kernel
-curl -fsSL -o /home/firecracker/vmlinux.bin \
+curl -fsSL -o ~/vmlinux.bin \
   "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
 
 # Root filesystem (Ubuntu 18.04)
-curl -fsSL -o /home/firecracker/rootfs.ext4 \
+curl -fsSL -o ~/rootfs.ext4 \
   "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/rootfs/bionic.rootfs.ext4"
 ```
 
 ## Step 3: Create a server config
 
-Create `server.toml` with the paths to your kernel and rootfs:
+Copy the example and edit it with the paths to your kernel and rootfs:
+
+```bash
+cp server.toml.example server.toml
+```
 
 ```toml
 # Required
-kernel = "/home/firecracker/vmlinux.bin"
-rootfs = "/home/firecracker/rootfs.ext4"
+kernel = "/path/to/vmlinux.bin"
+rootfs = "/path/to/rootfs.ext4"
 
 # Optional (these are the defaults)
-listen = "127.0.0.1:7654"
-max_ws_sessions = 32
-trust_forwarded_for = false
-exec_timeout_secs = 30
-console_timeout_secs = 3600
+# listen = "0.0.0.0:80"
+# max_ws_sessions = 32
+# trust_forwarded_for = false
+# exec_timeout_secs = 30
+# console_timeout_secs = 3600
 ```
 
 ### Config reference
@@ -66,7 +70,7 @@ console_timeout_secs = 3600
 |---|---|---|---|
 | `kernel` | Yes | -- | Path to the `vmlinux.bin` kernel image |
 | `rootfs` | Yes | -- | Path to the base `rootfs.ext4` filesystem |
-| `listen` | No | `127.0.0.1:7654` | Address and port to bind |
+| `listen` | No | `0.0.0.0:80` | Address and port to bind |
 | `max_ws_sessions` | No | `32` | Max concurrent WebSocket connections (console + exec) |
 | `trust_forwarded_for` | No | `false` | Trust `X-Forwarded-For` header for client IP (set `true` behind a reverse proxy) |
 | `exec_timeout_secs` | No | `30` | Max seconds a `noid exec` command can run |
@@ -86,7 +90,7 @@ The server will:
 You should see output like:
 
 ```
-noid-server listening on 127.0.0.1:7654
+noid-server listening on 0.0.0.0:80
 ```
 
 To run in the background:

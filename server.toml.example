@@ -1,0 +1,10 @@
+# Required: paths to your Firecracker kernel and root filesystem
+kernel = "/path/to/vmlinux.bin"
+rootfs = "/path/to/rootfs.ext4"
+
+# Optional (defaults shown)
+# listen = "0.0.0.0:80"
+# max_ws_sessions = 32
+# trust_forwarded_for = false
+# exec_timeout_secs = 30
+# console_timeout_secs = 3600

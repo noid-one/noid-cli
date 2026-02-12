@@ -21,7 +21,7 @@ sudo cp target/release/noid $HOME/.local/bin/
 Connect the client to your server:
 
 ```bash
-noid auth setup --url http://127.0.0.1:7654 --token noid_tok_your_token_here
+noid auth setup --url http://localhost --token noid_tok_your_token_here
 ```
 
 This saves the server URL and token to `~/.noid/config.toml` and verifies the connection by calling the server's `whoami` endpoint.
@@ -171,7 +171,7 @@ noid current
 ```
 
 ```
-Server: http://127.0.0.1:7654
+Server: http://localhost
 Active VM: my-vm
 ```
 
@@ -345,7 +345,7 @@ Created by `noid auth setup`. Stores server URL and token:
 
 ```toml
 [server]
-url = "http://127.0.0.1:7654"
+url = "http://localhost"
 token = "noid_tok_..."
 ```
 
