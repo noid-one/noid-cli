@@ -5,95 +5,178 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run
 
 ```bash
-cargo build --release          # release binary at target/release/noid
-cargo build                    # debug build
-cargo check                    # type-check without codegen (fastest feedback)
-cargo clippy                   # lint
+cargo build --workspace          # build all crates
+cargo build --release --workspace  # release builds
+cargo check --workspace          # type-check
+cargo clippy --workspace         # lint
+cargo test --workspace           # run all tests (46 total)
 ```
 
-Run tests with `cargo test`. No Makefile or build script.
+Three binaries:
+- `noid` — CLI client (what end users install)
+- `noid-server` — HTTP/WS server managing Firecracker VMs
+- `noid-local` — legacy standalone CLI (pre-client-server)
+
+## Workspace Layout
+
+```
+noid/
+  Cargo.toml                     # workspace root + noid-local package
+  src/                           # noid-local (standalone, unchanged)
+  crates/
+    noid-types/                  # wire types shared between client & server
+    noid-core/                   # VM engine: DB, storage, exec, auth, backend
+    noid-server/                 # HTTP/WS server on top of noid-core
+    noid-client/                 # CLI client (HTTP + WS)
+```
+
+### Dependency Graph
+
+```
+noid-types          (leaf — serde, serde_json only)
+    ↑
+noid-core           (depends on noid-types)
+    ↑
+noid-server         (depends on noid-core + noid-types)
+
+noid-client         (depends on noid-types only)
+noid-local          (standalone)
+```
 
 ## Architecture
 
-noid is a synchronous Rust CLI (~1400 lines across 7 files) that manages Firecracker microVMs. It spawns Firecracker processes, configures them via hand-rolled HTTP/1.1 over Unix sockets, and tracks state in SQLite.
+### Protocol: REST + WebSocket
 
-### Module responsibilities
+Synchronous stack — no async runtime:
+- **Server**: `tiny_http` (sync HTTP), `tungstenite` (sync WS)
+- **Client**: `ureq` (sync HTTP), `tungstenite` (sync WS)
 
-- **main.rs** (249 lines) — Command dispatch (match on `Command` enum) and the `exec_via_serial()` implementation. Each command handler is inline in main, not factored into separate functions per module.
-- **vm.rs** (413 lines) — Firecracker process lifecycle and HTTP API client. `spawn_fc()` creates the FC process with named FIFO for stdin + file for stdout. `create_vm()` orchestrates the full creation flow (storage → spawn → configure via API → boot → DB insert). Also has `write_to_serial()` and `serial_log_path()` helpers used by console and exec. The HTTP client (`fc_request`/`fc_put`/`fc_patch`) is a raw HTTP/1.1-over-Unix-socket implementation — no HTTP library dependency.
-- **db.rs** (214 lines) — SQLite via rusqlite (bundled). Schema auto-created on first `Db::open()`. Two tables: `vms` and `checkpoints`. All queries are inline SQL strings. `delete_vm()` cascades to checkpoints in application code (not via SQL CASCADE).
-- **storage.rs** (204 lines) — Filesystem operations with btrfs/ext4 auto-detection. Shells out to `btrfs`, `cp`, `stat`, `truncate`, `mkfs.btrfs`, `mount`. Key pattern: every operation has a btrfs fast-path (subvolume/snapshot/reflink) and an ext4 fallback (mkdir/`cp -a`/`rm -rf`).
-- **console.rs** (119 lines) — Bidirectional serial console bridge. Reader thread tails `serial.log`; main thread reads crossterm key events and writes to `serial.in` FIFO via `vm::write_to_serial()`. Ctrl+Q detaches. `key_to_bytes()` translates crossterm `KeyEvent` to terminal escape sequences.
-- **cli.rs** (88 lines) — clap `#[derive(Parser)]` structs defining 9 subcommands. All CLI surface area lives here.
-- **config.rs** (69 lines) — TOML config at `~/.noid/config.toml` with `kernel` and `rootfs` paths. Resolution order: CLI flag → config file → error.
+REST endpoints under `/v1/`:
+- `POST /v1/vms` — create VM
+- `GET /v1/vms` — list VMs
+- `GET /v1/vms/{name}` — get VM info
+- `DELETE /v1/vms/{name}` — destroy VM
+- `POST /v1/vms/{name}/exec` — HTTP exec (30s timeout, 1MB max)
+- `POST /v1/vms/{name}/checkpoints` — create checkpoint
+- `GET /v1/vms/{name}/checkpoints` — list checkpoints
+- `POST /v1/vms/{name}/restore` — restore from checkpoint
+- `GET /v1/vms/{name}/console` — WS upgrade for console
+- `GET /v1/vms/{name}/exec` — WS upgrade for streaming exec
+- `GET /v1/whoami`, `GET /v1/capabilities` — user/server info
+- `GET /healthz`, `GET /version` — no auth required
 
-### Key design decisions
+WS frames use 1-byte channel prefix: `0x01`=stdout, `0x02`=stderr, `0x03`=stdin.
 
-- **No fctools** — We initially planned to use the fctools SDK but it has a complex, poorly-documented API. Direct HTTP over Unix socket is simpler and gives us full control.
-- **No async runtime** — Despite the tokio dependency (reserved for future use), all I/O is blocking. Firecracker API calls use synchronous Unix socket reads/writes.
-- **No HTTP library** — The Firecracker API client hand-builds HTTP/1.1 requests and parses responses. Response parsing reads until Content-Length is satisfied or connection closes.
-- **Process model** — Firecracker processes are spawned and orphaned (`mem::forget()` on the `Child` handle). Each `noid` invocation is stateless; it reads the DB and probes process liveness with `kill(pid, 0)`. Destroy sends SIGTERM, waits 500ms, then SIGKILL.
-- **Serial I/O via named FIFO** — FC's stdin is connected to a named FIFO (`serial.in`), FC's stdout goes to a regular file (`serial.log`). This lets any later `noid` process write to or read from the serial console without needing the original process handle.
-- **Sentinel writer pattern** — A write-end fd for the FIFO is opened before `Command::spawn()` so FC inherits it. This keeps the FIFO alive (>=1 writer) even after the parent noid process exits, preventing FC from seeing EOF on stdin. Without this, only the first `exec`/`console` works — subsequent ones timeout because FC stopped reading.
+### Authentication
 
-### Firecracker API configuration order
+- Token format: `noid_tok_` + 64 hex chars (32 bytes entropy)
+- Tokens hashed at rest with SHA-256, constant-time comparison via `subtle`
+- Wire: `Authorization: Bearer noid_tok_...`
+- Rate limiting by token prefix, not IP
+- User management: `noid-server add-user/rotate-token/list-users/remove-user`
 
-`create_vm()` configures FC via PUT requests in this exact order (order matters):
-1. `PUT /machine-config` — vcpu_count, mem_size_mib
-2. `PUT /boot-source` — kernel_image_path, boot_args (`console=ttyS0 reboot=k panic=1 pci=off`)
-3. `PUT /drives/rootfs` — drive_id, path_on_host, is_root_device, is_read_only
-4. `PUT /actions` — InstanceStart
+### Multi-Tenancy
 
-Pause/resume uses `PATCH /vm` with `{"state": "Paused"}` / `{"state": "Resumed"}`.
-Snapshots use `PUT /snapshot/create` (Full type) and `PUT /snapshot/load` (with `resume_vm: true`).
+- `users` table: UUID `id`, `name`, `token_hash`
+- `vms` table has `user_id` column, `UNIQUE(user_id, name)`
+- Storage: `~/.noid/storage/users/{user_id}/vms/{name}/`
+- All queries scoped by `user_id`
 
-### Serial exec protocol
+### Crate Responsibilities
 
-`exec_via_serial()` in main.rs wraps commands with unique UUID markers:
+**noid-types** — Request/response structs with serde derives, WS channel constants.
+
+**noid-core**:
+- `vm.rs` — Firecracker process lifecycle + HTTP API (from original vm.rs)
+- `db.rs` — SQLite with users/vms/checkpoints tables, user_id scoping
+- `storage.rs` — btrfs/ext4 operations, user-namespaced paths
+- `exec.rs` — `exec_via_serial()` + `shell_escape()` (from original main.rs)
+- `backend.rs` — `VmBackend` trait + `FirecrackerBackend` with per-VM lock map, transactional create
+- `auth.rs` — token generation, hashing, verification, rate limiting
+- `config.rs` — shared path helpers
+
+**noid-server**:
+- `main.rs` — accept loop (thread-per-request), user management subcommands
+- `transport.rs` — `RequestContext`/`ResponseBuilder` abstraction over tiny_http
+- `router.rs` — path matching, auth middleware, request logging
+- `handlers.rs` — REST endpoint handlers (no tiny_http types)
+- `console.rs` — WS ↔ serial bridge
+- `ws_exec.rs` — WS exec streaming
+- `config.rs` — server config (listen, kernel, rootfs, max_ws_sessions)
+
+**noid-client**:
+- `main.rs` — clap dispatch → format output
+- `cli.rs` — clap definitions (auth, use, current, whoami, create, destroy, list, info, exec, console, checkpoint, checkpoints, restore)
+- `api.rs` — ureq HTTP client + Bearer auth, API version check
+- `console.rs` — WS + crossterm for interactive console
+- `exec.rs` — WS exec with fallback to HTTP POST
+- `config.rs` — client config (URL, token), .noid active VM file
+
+### Server Config (server.toml)
+
+```toml
+listen = "127.0.0.1:7654"
+kernel = "/path/to/vmlinux.bin"
+rootfs = "/path/to/rootfs.ext4"
+max_ws_sessions = 32
+trust_forwarded_for = false
+exec_timeout_secs = 30
+console_timeout_secs = 3600
 ```
-echo 'NOID_EXEC_<8-char-uuid>'; <command>; echo 'NOID_EXEC_<8-char-uuid>_END'
+
+### Client Config (~/.noid/config.toml)
+
+```toml
+[server]
+url = "http://127.0.0.1:7654"
+token = "noid_tok_..."
 ```
-It then polls `serial.log` for the markers on their own lines using `\r\n` delimiters (serial console uses CR+LF). The content between markers is extracted via `find()` on `"\r\n<marker>\r\n"` needles, trimmed, and printed. 30-second timeout, 100ms polling interval. The `\r\n`-delimited search is critical: matching bare markers would match inside the echoed command line, not the actual echo output.
 
-### Data layout
+Set via: `noid auth setup --url <url> --token <token>`
 
-All state lives under `~/.noid/`:
-- `config.toml` — user defaults (kernel, rootfs)
-- `noid.db` — SQLite (VM metadata, checkpoint records)
-- `storage/vms/{name}/` — per-VM directory:
-  - `rootfs.ext4` — copy of base rootfs (reflink on btrfs, regular copy on ext4)
-  - `serial.log` — VM serial console output (FC stdout redirected here)
-  - `serial.in` — named FIFO for serial console input (FC stdin reads from here)
-  - `firecracker.sock` — FC API Unix socket
-  - `firecracker.log` — FC's own log (not serial output)
-- `storage/checkpoints/{vm-name}/{checkpoint-id}/` — snapshot of the VM directory:
-  - `rootfs.ext4`, `serial.log`, `firecracker.log` (copied from VM dir)
-  - `memory.snap` — Firecracker memory snapshot
-  - `vmstate.snap` — Firecracker CPU/device state snapshot
+### Active VM (.noid file)
 
-### DB schema
+Commands that take `<name>` fall back to `.noid` in CWD:
+```
+noid use myvm        # writes "myvm" to ./.noid
+noid exec -- ls      # targets myvm
+```
 
-Two tables:
-- `vms` — name (UNIQUE), pid, socket_path, kernel, rootfs, cpus, mem_mib, state, created_at
-- `checkpoints` — id (PK, TEXT 8-char UUID), vm_name (FK → vms.name), label, snapshot_path, created_at
+### DB Schema
 
-Schema is created inline in `Db::init_schema()` via `CREATE TABLE IF NOT EXISTS`, not via migrations.
+Three tables:
+- `users` — id (UUID), name (UNIQUE), token_hash, created_at
+- `vms` — user_id (FK), name, UNIQUE(user_id, name), pid, socket_path, kernel, rootfs, cpus, mem_mib, state, created_at
+- `checkpoints` — id, vm_name, user_id, label, snapshot_path, created_at
 
-## Known pitfalls
+### Data Layout (multi-tenant)
 
-- **FIFO EOF** — If the sentinel writer fd is not inherited by FC, the FIFO loses all writers when the first exec/console closes. FC sees EOF and stops reading stdin. Second exec will timeout. Fix: the sentinel fd must be opened BEFORE `Command::spawn()` so FC inherits it.
-- **Serial line endings** — The serial console uses `\r\n`, not `\n`. Exec marker matching must use `\r\n` delimiters or markers won't be found.
-- **Serial echo** — The terminal echoes back typed characters. Exec markers appear twice in serial.log: once in the echoed command line, once as echo output. The parser must find markers on their own lines (preceded by `\r\n`) to avoid matching the echoed command.
-- **VM boot time** — The VM needs a few seconds to boot before exec/console work. The quickstart Ubuntu 18.04 rootfs auto-logs in as root on ttyS0.
-- **nix crate features** — The `fs` feature is required for `mkfifo`, `fcntl::open`, `OFlag`, `FcntlArg`. Missing it causes confusing "could not find `stat` in `sys`" errors.
-- **FK constraints** — Destroying a VM must delete its checkpoints first (done in `Db::delete_vm`), or the DELETE will fail with a foreign key violation. rusqlite doesn't enforce FK by default, but the explicit DELETE order in `delete_vm` handles this.
-- **FIFO open blocking** — Opening a FIFO for reading blocks until a writer opens it (and vice versa). `spawn_fc` opens the read end with `O_NONBLOCK` to avoid hanging, then clears the flag so FC blocks normally on reads.
-- **`unsafe` in vm.rs** — `File::from_raw_fd(read_fd)` is unsafe because ownership of the fd is transferred. This is correct here because `nix::fcntl::open` returns an owned fd.
+```
+~/.noid/
+  config.toml
+  noid.db
+  storage/users/{user_id}/
+    vms/{name}/        — rootfs.ext4, serial.log, serial.in, firecracker.sock, firecracker.log
+    checkpoints/{name}/{id}/  — rootfs.ext4, serial.log, memory.snap, vmstate.snap
+```
 
-## Test images
+## Key Design Decisions
 
-Quickstart images that work with noid:
-- Kernel: `https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin` (21 MiB)
-- Rootfs: `https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/rootfs/bionic.rootfs.ext4` (300 MiB, Ubuntu 18.04, auto-login root)
+- **VmBackend trait** in noid-core allows mocking for tests. `FirecrackerBackend` wraps Db in Mutex for thread safety.
+- **Transport abstraction** — handlers never touch tiny_http types. Swapping HTTP lib only changes transport.rs.
+- **Per-VM lock map** in backend prevents concurrent serial writes. Console holds lock for duration.
+- **Transactional create** — if FC spawn or API config fails, rolls back DB + storage.
+- **Destroy** acquires VM lock, kills process, cleans storage + DB.
 
-These are downloaded to `/home/firecracker/vmlinux.bin` and `/home/firecracker/rootfs.ext4` on the current host.
+## Known Pitfalls
+
+- **DB schema migration** — old noid.db lacks `user_id` column. Delete `~/.noid/noid.db` when upgrading.
+- **FIFO EOF** — sentinel writer fd must be inherited by FC child.
+- **Serial line endings** — `\r\n` not `\n`. Exec markers use `\r\n` delimiters.
+- **nix crate features** — `fs` feature needed for mkfifo.
+- **rusqlite not Sync** — Db wrapped in Mutex in FirecrackerBackend.
+
+## Test Images
+
+- Kernel: `/home/firecracker/vmlinux.bin`
+- Rootfs: `/home/firecracker/rootfs.ext4`

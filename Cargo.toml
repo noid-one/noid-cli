@@ -1,7 +1,15 @@
+[workspace]
+members = [".", "crates/*"]
+resolver = "2"
+
 [package]
-name = "noid"
+name = "noid-local"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "noid-local"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

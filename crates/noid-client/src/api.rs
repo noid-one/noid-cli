@@ -1,0 +1,165 @@
+use anyhow::{Context, Result};
+use noid_types::*;
+
+use crate::config::ServerSection;
+
+const API_VERSION: u32 = 1;
+
+pub struct ApiClient {
+    base_url: String,
+    token: String,
+}
+
+impl ApiClient {
+    pub fn new(server: &ServerSection) -> Self {
+        Self {
+            base_url: server.url.trim_end_matches('/').to_string(),
+            token: server.token.clone(),
+        }
+    }
+
+    fn get(&self, path: &str) -> Result<ureq::Response> {
+        let url = format!("{}{path}", self.base_url);
+        let resp = ureq::get(&url)
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .call()
+            .map_err(|e| self.handle_error(e))?;
+        self.check_api_version(&resp);
+        Ok(resp)
+    }
+
+    fn post(&self, path: &str, body: &impl serde::Serialize) -> Result<ureq::Response> {
+        let url = format!("{}{path}", self.base_url);
+        let resp = ureq::post(&url)
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .send_json(serde_json::to_value(body)?)
+            .map_err(|e| self.handle_error(e))?;
+        self.check_api_version(&resp);
+        Ok(resp)
+    }
+
+    fn delete(&self, path: &str) -> Result<ureq::Response> {
+        let url = format!("{}{path}", self.base_url);
+        let resp = ureq::delete(&url)
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .call()
+            .map_err(|e| self.handle_error(e))?;
+        self.check_api_version(&resp);
+        Ok(resp)
+    }
+
+    fn handle_error(&self, err: ureq::Error) -> anyhow::Error {
+        match err {
+            ureq::Error::Status(status, resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(&body) {
+                    anyhow::anyhow!("server error ({}): {}", status, err_resp.error)
+                } else {
+                    anyhow::anyhow!("server error ({}): {}", status, body)
+                }
+            }
+            ureq::Error::Transport(t) => {
+                anyhow::anyhow!("connection error: {t}")
+            }
+        }
+    }
+
+    fn check_api_version(&self, resp: &ureq::Response) {
+        if let Some(version_str) = resp.header("X-Noid-Api-Version") {
+            if let Ok(version) = version_str.parse::<u32>() {
+                if version != API_VERSION {
+                    eprintln!(
+                        "warning: server API version ({version}) differs from client ({API_VERSION})"
+                    );
+                }
+            }
+        }
+    }
+
+    // --- Public API methods ---
+
+    pub fn whoami(&self) -> Result<WhoamiResponse> {
+        let resp = self.get("/v1/whoami")?;
+        resp.into_json().context("failed to parse whoami response")
+    }
+
+    pub fn create_vm(&self, name: &str, cpus: u32, mem_mib: u32) -> Result<VmInfo> {
+        let req = CreateVmRequest {
+            name: name.to_string(),
+            cpus,
+            mem_mib,
+        };
+        let resp = self.post("/v1/vms", &req)?;
+        resp.into_json().context("failed to parse create response")
+    }
+
+    pub fn list_vms(&self) -> Result<Vec<VmInfo>> {
+        let resp = self.get("/v1/vms")?;
+        resp.into_json().context("failed to parse list response")
+    }
+
+    pub fn get_vm(&self, name: &str) -> Result<VmInfo> {
+        let resp = self.get(&format!("/v1/vms/{name}"))?;
+        resp.into_json().context("failed to parse VM info")
+    }
+
+    pub fn destroy_vm(&self, name: &str) -> Result<()> {
+        self.delete(&format!("/v1/vms/{name}"))?;
+        Ok(())
+    }
+
+    pub fn exec_vm(&self, name: &str, command: &[String]) -> Result<ExecResponse> {
+        let req = ExecRequest {
+            command: command.to_vec(),
+            tty: false,
+        };
+        let resp = self.post(&format!("/v1/vms/{name}/exec"), &req)?;
+        resp.into_json().context("failed to parse exec response")
+    }
+
+    pub fn create_checkpoint(
+        &self,
+        name: &str,
+        label: Option<&str>,
+    ) -> Result<CheckpointInfo> {
+        let req = CheckpointRequest {
+            label: label.map(|s| s.to_string()),
+        };
+        let resp = self.post(&format!("/v1/vms/{name}/checkpoints"), &req)?;
+        resp.into_json()
+            .context("failed to parse checkpoint response")
+    }
+
+    pub fn list_checkpoints(&self, name: &str) -> Result<Vec<CheckpointInfo>> {
+        let resp = self.get(&format!("/v1/vms/{name}/checkpoints"))?;
+        resp.into_json()
+            .context("failed to parse checkpoints response")
+    }
+
+    pub fn restore_vm(
+        &self,
+        name: &str,
+        checkpoint_id: &str,
+        new_name: Option<&str>,
+    ) -> Result<VmInfo> {
+        let req = RestoreRequest {
+            checkpoint_id: checkpoint_id.to_string(),
+            new_name: new_name.map(|s| s.to_string()),
+        };
+        let resp = self.post(&format!("/v1/vms/{name}/restore"), &req)?;
+        resp.into_json().context("failed to parse restore response")
+    }
+
+    /// Return the WebSocket URL for a given path (replaces http(s) with ws(s)).
+    pub fn ws_url(&self, path: &str) -> String {
+        let base = self
+            .base_url
+            .replace("http://", "ws://")
+            .replace("https://", "wss://");
+        format!("{base}{path}")
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+}
