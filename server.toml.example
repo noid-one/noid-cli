@@ -1,6 +1,6 @@
 # Required: paths to your Firecracker kernel and root filesystem
-kernel = "/path/to/vmlinux.bin"
-rootfs = "/path/to/rootfs.ext4"
+kernel = "/home/firecracker/vmlinux.bin"
+rootfs = "/home/firecracker/rootfs-ubuntu2404.ext4"
 
 # Optional (defaults shown)
 # listen = "0.0.0.0:7654"

@@ -21,6 +21,9 @@ pub struct VmRecord {
     pub mem_mib: u32,
     pub state: String,
     pub created_at: String,
+    pub net_index: Option<u32>,
+    pub tap_name: Option<String>,
+    pub guest_ip: Option<String>,
 }
 
 #[derive(Debug)]
@@ -40,6 +43,9 @@ pub struct VmInsertData {
     pub rootfs: String,
     pub cpus: u32,
     pub mem_mib: u32,
+    pub net_index: Option<u32>,
+    pub tap_name: Option<String>,
+    pub guest_ip: Option<String>,
 }
 
 #[derive(Debug)]
@@ -83,6 +89,9 @@ impl Db {
                 mem_mib INTEGER NOT NULL DEFAULT 128,
                 state TEXT NOT NULL DEFAULT 'running',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                net_index INTEGER,
+                tap_name TEXT,
+                guest_ip TEXT,
                 UNIQUE(user_id, name)
             );
             CREATE TABLE IF NOT EXISTS checkpoints (
@@ -211,8 +220,8 @@ impl Db {
 
     pub fn insert_vm(&self, user_id: &str, name: &str, data: VmInsertData) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO vms (user_id, name, pid, socket_path, kernel, rootfs, cpus, mem_mib, state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running')",
+            "INSERT INTO vms (user_id, name, pid, socket_path, kernel, rootfs, cpus, mem_mib, state, net_index, tap_name, guest_ip)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running', ?9, ?10, ?11)",
             params![
                 user_id,
                 name,
@@ -221,7 +230,10 @@ impl Db {
                 data.kernel,
                 data.rootfs,
                 data.cpus,
-                data.mem_mib
+                data.mem_mib,
+                data.net_index,
+                data.tap_name,
+                data.guest_ip
             ],
         )?;
         Ok(())
@@ -229,7 +241,7 @@ impl Db {
 
     pub fn get_vm(&self, user_id: &str, name: &str) -> Result<Option<VmRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, user_id, name, pid, socket_path, kernel, rootfs, cpus, mem_mib, state, created_at
+            "SELECT id, user_id, name, pid, socket_path, kernel, rootfs, cpus, mem_mib, state, created_at, net_index, tap_name, guest_ip
              FROM vms WHERE user_id = ?1 AND name = ?2",
         )?;
         let mut rows = stmt.query_map(params![user_id, name], |row| {
@@ -245,6 +257,9 @@ impl Db {
                 mem_mib: row.get(8)?,
                 state: row.get(9)?,
                 created_at: row.get(10)?,
+                net_index: row.get(11)?,
+                tap_name: row.get(12)?,
+                guest_ip: row.get(13)?,
             })
         })?;
         match rows.next() {
@@ -255,7 +270,7 @@ impl Db {
 
     pub fn list_vms(&self, user_id: &str) -> Result<Vec<VmRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, user_id, name, pid, socket_path, kernel, rootfs, cpus, mem_mib, state, created_at
+            "SELECT id, user_id, name, pid, socket_path, kernel, rootfs, cpus, mem_mib, state, created_at, net_index, tap_name, guest_ip
              FROM vms WHERE user_id = ?1 ORDER BY created_at",
         )?;
         let rows = stmt.query_map(params![user_id], |row| {
@@ -271,8 +286,19 @@ impl Db {
                 mem_mib: row.get(8)?,
                 state: row.get(9)?,
                 created_at: row.get(10)?,
+                net_index: row.get(11)?,
+                tap_name: row.get(12)?,
+                guest_ip: row.get(13)?,
             })
         })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn list_used_net_indices(&self) -> Result<Vec<u32>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT net_index FROM vms WHERE net_index IS NOT NULL")?;
+        let rows = stmt.query_map([], |row| row.get::<_, u32>(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 

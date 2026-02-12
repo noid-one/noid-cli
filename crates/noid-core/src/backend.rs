@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 /// Per-VM lock map: keyed by (user_id, vm_name), value is a shared mutex.
 type VmLockMap = Mutex<HashMap<(String, String), Arc<Mutex<()>>>>;
 
-use crate::{db, exec, storage, vm};
+use crate::{db, exec, network, storage, vm};
 
 /// Handle for an attached console session.
 pub struct ConsoleHandle {
@@ -115,10 +115,26 @@ impl VmBackend for FirecrackerBackend {
             bail!("rootfs not found: {}", self.rootfs);
         }
 
+        // Allocate network index and set up TAP via noid-netd
+        let net_config = match (|| -> Result<_> {
+            let used = self.db().list_used_net_indices()?;
+            let index = network::allocate_index(&used)?;
+            network::setup_vm_network(index)
+        })() {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                eprintln!("warning: VM networking unavailable: {e:#}");
+                None
+            }
+        };
+
         let subvol = storage::create_vm_subvolume(user_id, name)?;
         let vm_rootfs = match storage::reflink_rootfs(user_id, name, &self.rootfs) {
             Ok(r) => r,
             Err(e) => {
+                if let Some(ref nc) = net_config {
+                    let _ = network::teardown_vm_network(&nc.tap_name);
+                }
                 let _ = storage::delete_subvolume(user_id, name);
                 return Err(e);
             }
@@ -127,6 +143,9 @@ impl VmBackend for FirecrackerBackend {
         let (pid, sock) = match vm::spawn_fc(&subvol) {
             Ok(r) => r,
             Err(e) => {
+                if let Some(ref nc) = net_config {
+                    let _ = network::teardown_vm_network(&nc.tap_name);
+                }
                 let _ = storage::delete_subvolume(user_id, name);
                 return Err(e);
             }
@@ -138,8 +157,12 @@ impl VmBackend for FirecrackerBackend {
             &vm_rootfs.to_string_lossy(),
             cpus,
             mem_mib,
+            net_config.as_ref(),
         ) {
             vm::kill_vm_process(pid as i64);
+            if let Some(ref nc) = net_config {
+                let _ = network::teardown_vm_network(&nc.tap_name);
+            }
             let _ = storage::delete_subvolume(user_id, name);
             return Err(e);
         }
@@ -154,9 +177,15 @@ impl VmBackend for FirecrackerBackend {
                 rootfs: vm_rootfs.to_string_lossy().to_string(),
                 cpus,
                 mem_mib,
+                net_index: net_config.as_ref().map(|c| c.index),
+                tap_name: net_config.as_ref().map(|c| c.tap_name.clone()),
+                guest_ip: net_config.as_ref().map(|c| c.guest_ip.clone()),
             },
         ) {
             vm::kill_vm_process(pid as i64);
+            if let Some(ref nc) = net_config {
+                let _ = network::teardown_vm_network(&nc.tap_name);
+            }
             let _ = storage::delete_subvolume(user_id, name);
             return Err(e);
         }
@@ -181,6 +210,13 @@ impl VmBackend for FirecrackerBackend {
 
         if let Some(pid) = vm_rec.pid {
             vm::kill_vm_process(pid);
+        }
+
+        // Teardown TAP device if networking was configured
+        if let Some(ref tap) = vm_rec.tap_name {
+            if let Err(e) = network::teardown_vm_network(tap) {
+                eprintln!("warning: failed to teardown TAP {tap}: {e:#}");
+            }
         }
 
         storage::delete_subvolume(user_id, name)?;
@@ -305,15 +341,47 @@ impl VmBackend for FirecrackerBackend {
                 if let Some(pid) = rec.pid {
                     vm::kill_vm_process(pid);
                 }
+                // Teardown old VM's TAP
+                if let Some(ref tap) = rec.tap_name {
+                    let _ = network::teardown_vm_network(tap);
+                }
                 storage::delete_subvolume(user_id, name)?;
                 self.db().delete_vm(user_id, name)?;
             }
             storage::clone_snapshot(user_id, &checkpoint.snapshot_path, target_name)?;
         }
 
+        // Allocate new TAP for restored VM
+        let net_config = match (|| -> Result<_> {
+            let used = self.db().list_used_net_indices()?;
+            let index = network::allocate_index(&used)?;
+            network::setup_vm_network(index)
+        })() {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                eprintln!("warning: VM networking unavailable for restore: {e:#}");
+                None
+            }
+        };
+
         let subvol = storage::vm_dir(user_id, target_name);
-        let (pid, socket_path) = vm::spawn_fc(&subvol)?;
-        vm::load_fc_snapshot(&socket_path, &subvol)?;
+        let (pid, socket_path) = match vm::spawn_fc(&subvol) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(ref nc) = net_config {
+                    let _ = network::teardown_vm_network(&nc.tap_name);
+                }
+                return Err(e);
+            }
+        };
+
+        if let Err(e) = vm::load_fc_snapshot(&socket_path, &subvol) {
+            vm::kill_vm_process(pid as i64);
+            if let Some(ref nc) = net_config {
+                let _ = network::teardown_vm_network(&nc.tap_name);
+            }
+            return Err(e);
+        }
 
         let orig_vm = self.db().get_vm(user_id, &checkpoint.vm_name)?;
         let (kernel, rootfs_path, cpus, mem_mib) = if let Some(ref orig) = orig_vm {
@@ -332,7 +400,7 @@ impl VmBackend for FirecrackerBackend {
             )
         };
 
-        self.db().insert_vm(
+        if let Err(e) = self.db().insert_vm(
             user_id,
             target_name,
             db::VmInsertData {
@@ -342,8 +410,17 @@ impl VmBackend for FirecrackerBackend {
                 rootfs: rootfs_path,
                 cpus,
                 mem_mib,
+                net_index: net_config.as_ref().map(|c| c.index),
+                tap_name: net_config.as_ref().map(|c| c.tap_name.clone()),
+                guest_ip: net_config.as_ref().map(|c| c.guest_ip.clone()),
             },
-        )?;
+        ) {
+            vm::kill_vm_process(pid as i64);
+            if let Some(ref nc) = net_config {
+                let _ = network::teardown_vm_network(&nc.tap_name);
+            }
+            return Err(e);
+        }
 
         Ok(VmInfo {
             name: target_name.to_string(),

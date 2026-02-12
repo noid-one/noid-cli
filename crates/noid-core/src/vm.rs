@@ -189,6 +189,7 @@ pub fn configure_and_start_vm(
     rootfs_path: &str,
     cpus: u32,
     mem_mib: u32,
+    net: Option<&crate::network::NetworkConfig>,
 ) -> Result<()> {
     fc_put(
         socket_path,
@@ -200,12 +201,19 @@ pub fn configure_and_start_vm(
     )
     .context("failed to set machine config")?;
 
+    // Build boot args — append kernel ip= param if networking is configured
+    let mut boot_args = "console=ttyS0 reboot=k panic=1 pci=off".to_string();
+    if let Some(net_config) = net {
+        boot_args.push(' ');
+        boot_args.push_str(&crate::network::kernel_ip_param(net_config));
+    }
+
     fc_put(
         socket_path,
         "/boot-source",
         &serde_json::json!({
             "kernel_image_path": kernel,
-            "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+            "boot_args": boot_args
         }),
     )
     .context("failed to set boot source")?;
@@ -221,6 +229,20 @@ pub fn configure_and_start_vm(
         }),
     )
     .context("failed to set root drive")?;
+
+    // Configure network interface if provided
+    if let Some(net_config) = net {
+        fc_put(
+            socket_path,
+            "/network-interfaces/eth0",
+            &serde_json::json!({
+                "iface_id": "eth0",
+                "guest_mac": net_config.guest_mac,
+                "host_dev_name": net_config.tap_name
+            }),
+        )
+        .context("failed to set network interface")?;
+    }
 
     fc_put(
         socket_path,

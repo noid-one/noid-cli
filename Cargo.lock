@@ -760,6 +760,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "noid-netd"
+version = "0.2.4"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "noid-server"
 version = "0.2.4"
 dependencies = [
