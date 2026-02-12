@@ -61,12 +61,12 @@ Edit `server.toml` to point to your images:
 kernel = "/home/youruser/vmlinux.bin"
 rootfs = "/home/youruser/rootfs.ext4"
 
-# listen = "0.0.0.0:80"         # default: binds all interfaces on port 80
+# listen = "0.0.0.0:7654"       # default: binds all interfaces on port 7654
 ```
 
 See `server.toml.example` for all options.
 
-Port 80 requires root. To run without root, use a higher port (e.g. `listen = "0.0.0.0:8080"`).
+The default port is 7654, which does not require root.
 
 ```bash
 noid-server serve --config server.toml

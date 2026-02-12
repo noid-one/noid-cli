@@ -17,7 +17,7 @@ pub struct ServerConfig {
 }
 
 fn default_listen() -> String {
-    "0.0.0.0:80".to_string()
+    "0.0.0.0:7654".to_string()
 }
 
 fn default_max_ws_sessions() -> usize {
@@ -59,7 +59,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(cfg.listen, "0.0.0.0:80");
+        assert_eq!(cfg.listen, "0.0.0.0:7654");
         assert_eq!(cfg.kernel, "/path/to/vmlinux.bin");
         assert_eq!(cfg.rootfs, "/path/to/rootfs.ext4");
         assert_eq!(cfg.max_ws_sessions, 32);
@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn parse_missing_required_field() {
         // kernel and rootfs are required
-        let result = ServerConfig::from_str(r#"listen = "0.0.0.0:80""#);
+        let result = ServerConfig::from_str(r#"listen = "0.0.0.0:7654""#);
         assert!(result.is_err());
     }
 }

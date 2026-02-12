@@ -115,7 +115,7 @@ WS frames use 1-byte channel prefix: `0x01`=stdout, `0x02`=stderr, `0x03`=stdin.
 ### Server Config (server.toml)
 
 ```toml
-listen = "0.0.0.0:80"
+listen = "0.0.0.0:7654"
 kernel = "/path/to/vmlinux.bin"
 rootfs = "/path/to/rootfs.ext4"
 max_ws_sessions = 32

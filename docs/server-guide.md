@@ -57,7 +57,7 @@ kernel = "/path/to/vmlinux.bin"
 rootfs = "/path/to/rootfs.ext4"
 
 # Optional (these are the defaults)
-# listen = "0.0.0.0:80"
+# listen = "0.0.0.0:7654"
 # max_ws_sessions = 32
 # trust_forwarded_for = false
 # exec_timeout_secs = 30
@@ -70,7 +70,7 @@ rootfs = "/path/to/rootfs.ext4"
 |---|---|---|---|
 | `kernel` | Yes | -- | Path to the `vmlinux.bin` kernel image |
 | `rootfs` | Yes | -- | Path to the base `rootfs.ext4` filesystem |
-| `listen` | No | `0.0.0.0:80` | Address and port to bind |
+| `listen` | No | `0.0.0.0:7654` | Address and port to bind |
 | `max_ws_sessions` | No | `32` | Max concurrent WebSocket connections (console + exec) |
 | `trust_forwarded_for` | No | `false` | Trust `X-Forwarded-For` header for client IP (set `true` behind a reverse proxy) |
 | `exec_timeout_secs` | No | `30` | Max seconds a `noid exec` command can run |
@@ -90,7 +90,7 @@ The server will:
 You should see output like:
 
 ```
-noid-server listening on 0.0.0.0:80
+noid-server listening on 0.0.0.0:7654
 ```
 
 To run in the background:
