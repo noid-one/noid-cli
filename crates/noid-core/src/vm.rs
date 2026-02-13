@@ -251,9 +251,10 @@ pub fn configure_and_start_vm(
     )
     .context("failed to set machine config")?;
 
-    // Build boot args — append kernel ip= param if networking is configured
+    // Build boot args — append kernel ip= param if networking is configured.
+    // net.ifnames=0 biosdevname=0 keep the NIC named eth0 (reconfigure_guest_network depends on this).
     let mut boot_args =
-        "console=ttyS0 reboot=k panic=1 pci=off quiet loglevel=1 systemd.show_status=auto"
+        "console=ttyS0 reboot=k panic=1 pci=off quiet loglevel=1 systemd.show_status=auto net.ifnames=0 biosdevname=0"
             .to_string();
     if let Some(net_config) = net {
         boot_args.push(' ');

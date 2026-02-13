@@ -226,15 +226,12 @@ ExecStart=-/sbin/agetty --autologin noid --keep-baud 115200,57600,38400,9600 tty
 EOF
 systemctl enable serial-getty@ttyS0.service
 
-# Networking
-cat > /etc/systemd/network/20-eth0.network << 'EOF'
-[Match]
-Name=eth0
-
-[Network]
-DHCP=no
-EOF
-systemctl enable systemd-networkd
+# Networking — kernel ip= boot param handles static config.
+# systemd-networkd must be disabled: it takes ownership of eth0 and flushes
+# the kernel-configured IP when no Address= is defined in .network files.
+rm -rf /etc/systemd/network/
+systemctl disable systemd-networkd 2>/dev/null || true
+systemctl mask systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
 # Keep DNS static via /etc/resolv.conf for minimal images. resolved can fail
 # in stripped environments and is not required for noid exec.
 systemctl disable systemd-resolved 2>/dev/null || true
