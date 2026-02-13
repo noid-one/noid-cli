@@ -318,6 +318,8 @@ GCEOF
         kill "$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
         rm -f "$GOLDEN_TOML"
+        # Ensure noid-netd is running even if the script exits early
+        systemctl start noid-netd 2>/dev/null || true
     }
     trap golden_cleanup EXIT
 
