@@ -225,10 +225,14 @@ impl FirecrackerBackend {
             let _ = std::fs::remove_file(alias);
         }
 
-        // Reconfigure guest network (snapshot has old template IP)
+        // Reconfigure guest network (snapshot has old template IP).
+        // Brief delay lets the guest kernel stabilize after resume.
         if let Some(ref nc) = net_config {
+            std::thread::sleep(std::time::Duration::from_secs(1));
             if let Err(e) = self.reconfigure_guest_network(&subvol, nc) {
                 eprintln!("warning: failed to reconfigure guest network: {e:#}");
+                // Send Ctrl+C to unblock the serial console if the command hung
+                let _ = vm::write_to_serial(&subvol, b"\x03\n");
             }
         }
 
@@ -286,25 +290,25 @@ impl FirecrackerBackend {
 
     /// After restoring from snapshot, reconfigure the guest's network interface.
     /// The snapshot has the template's old IP; we flush and assign the new one.
-    /// Uses exec_via_serial for proper marker-based synchronization.
+    /// Uses a short timeout since this is best-effort (VM is usable without it).
     fn reconfigure_guest_network(
         &self,
         vm_dir: &std::path::Path,
         net_config: &network::NetworkConfig,
     ) -> Result<()> {
-        let cmd = vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            format!(
-                "sudo ip addr flush dev eth0 && \
-                 sudo ip addr add {}/30 dev eth0 && \
-                 sudo ip link set eth0 up && \
-                 sudo ip route add default via {}",
-                net_config.guest_ip, net_config.host_ip
-            ),
-        ];
+        // Run ip commands directly in the shell (no bash -c wrapper) to keep
+        // the serial line short and avoid nested quoting issues.
+        let cmd_str = format!(
+            "sudo ip addr flush dev eth0 && \
+             sudo ip addr add {}/30 dev eth0 && \
+             sudo ip link set eth0 up && \
+             sudo ip route add default via {}",
+            net_config.guest_ip, net_config.host_ip
+        );
+        let cmd = vec!["sh".to_string(), "-c".to_string(), cmd_str];
+        let timeout = self.exec_timeout_secs.min(5);
         let (_, exit_code, timed_out, _) =
-            exec::exec_via_serial(vm_dir, &cmd, self.exec_timeout_secs)?;
+            exec::exec_via_serial(vm_dir, &cmd, timeout)?;
         if timed_out {
             bail!("network reconfiguration timed out");
         }
