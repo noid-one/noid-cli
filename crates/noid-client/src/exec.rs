@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use noid_types::{ExecRequest, ExecResult, ErrorResponse, CHANNEL_STDOUT, CHANNEL_STDERR};
+use noid_types::{ErrorResponse, ExecRequest, ExecResult, CHANNEL_STDERR, CHANNEL_STDOUT};
 use std::io::Write;
 use std::time::Duration;
 use tungstenite::protocol::Message;
@@ -8,10 +8,7 @@ use crate::api::ApiClient;
 
 pub fn exec_ws(api: &ApiClient, vm_name: &str, command: &[String]) -> Result<i32> {
     let mut ws = api
-        .ws_connect(
-            &format!("/v1/vms/{vm_name}/exec"),
-            Duration::from_secs(10),
-        )
+        .ws_connect(&format!("/v1/vms/{vm_name}/exec"), Duration::from_secs(10))
         .context("failed to connect to exec WebSocket")?;
 
     // Send the exec request

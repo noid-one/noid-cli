@@ -65,7 +65,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Serve { config: config_path } => cmd_serve(&config_path),
+        Command::Serve {
+            config: config_path,
+        } => cmd_serve(&config_path),
         Command::AddUser { name } => cmd_add_user(&name),
         Command::RotateToken { name } => cmd_rotate_token(&name),
         Command::ListUsers => cmd_list_users(),
@@ -96,20 +98,21 @@ fn cmd_serve(config_path: &str) -> Result<()> {
     let server = tiny_http::Server::http(&config.listen)
         .map_err(|e| anyhow::anyhow!("failed to bind {}: {e}", config.listen))?;
 
-    eprintln!("noid-server v{} listening on {}", env!("CARGO_PKG_VERSION"), config.listen);
+    eprintln!(
+        "noid-server v{} listening on {}",
+        env!("CARGO_PKG_VERSION"),
+        config.listen
+    );
 
     for mut request in server.incoming_requests() {
         let state = state.clone();
         let trust_fwd = config.trust_forwarded_for;
 
         // Check if this is a WebSocket upgrade
-        let is_upgrade = request
-            .headers()
-            .iter()
-            .any(|h| {
-                h.field.as_str().as_str().eq_ignore_ascii_case("upgrade")
-                    && h.value.as_str().eq_ignore_ascii_case("websocket")
-            });
+        let is_upgrade = request.headers().iter().any(|h| {
+            h.field.as_str().as_str().eq_ignore_ascii_case("upgrade")
+                && h.value.as_str().eq_ignore_ascii_case("websocket")
+        });
 
         if is_upgrade {
             std::thread::spawn(move || {
@@ -128,10 +131,7 @@ fn cmd_serve(config_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_ws_upgrade(
-    request: tiny_http::Request,
-    state: Arc<ServerState>,
-) {
+fn handle_ws_upgrade(request: tiny_http::Request, state: Arc<ServerState>) {
     // Parse headers directly — do NOT call from_tiny_http which reads
     // the request body (blocks forever on upgrade requests with no body).
     let mut headers = std::collections::HashMap::new();
@@ -141,7 +141,10 @@ fn handle_ws_upgrade(
             h.value.as_str().to_string(),
         );
     }
-    let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_default();
+    let remote_addr = request
+        .remote_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default();
     let ctx = transport::RequestContext {
         method: request.method().to_string(),
         path: request.url().to_string(),
@@ -198,12 +201,15 @@ fn handle_ws_upgrade(
 
     eprintln!(
         "[ws] {} {} WS /v1/vms/{}/{} remote={}",
-        user.name, user.id, vm_name, endpoint,
-        ctx.remote_addr,
+        user.name, user.id, vm_name, endpoint, ctx.remote_addr,
     );
 
     // We need to compute the Sec-WebSocket-Accept header
-    let ws_key = ctx.headers.get("sec-websocket-key").cloned().unwrap_or_default();
+    let ws_key = ctx
+        .headers
+        .get("sec-websocket-key")
+        .cloned()
+        .unwrap_or_default();
     let accept_key = tungstenite::handshake::derive_accept_key(ws_key.as_bytes());
 
     let response = tiny_http::Response::new(
@@ -211,11 +217,7 @@ fn handle_ws_upgrade(
         vec![
             tiny_http::Header::from_bytes(b"Connection", b"Upgrade").unwrap(),
             tiny_http::Header::from_bytes(b"Upgrade", b"websocket").unwrap(),
-            tiny_http::Header::from_bytes(
-                b"Sec-WebSocket-Accept",
-                accept_key.as_bytes(),
-            )
-            .unwrap(),
+            tiny_http::Header::from_bytes(b"Sec-WebSocket-Accept", accept_key.as_bytes()).unwrap(),
         ],
         std::io::Cursor::new(vec![]),
         Some(0),
@@ -241,7 +243,9 @@ fn handle_ws_upgrade(
 
     eprintln!(
         "[ws] {} WS /v1/vms/{}/{} closed ({}s)",
-        user.name, vm_name, endpoint,
+        user.name,
+        vm_name,
+        endpoint,
         ws_start.elapsed().as_secs(),
     );
     state.ws_session_count.fetch_sub(1, Ordering::SeqCst);

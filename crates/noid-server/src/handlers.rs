@@ -65,7 +65,10 @@ pub fn create_vm(req: AuthenticatedRequest, state: &Arc<ServerState>) -> Respons
         Err(e) => return ResponseBuilder::error(400, &format!("invalid request body: {e}")),
     };
 
-    match state.backend.create(&req.user.id, &body.name, body.cpus, body.mem_mib) {
+    match state
+        .backend
+        .create(&req.user.id, &body.name, body.cpus, body.mem_mib)
+    {
         Ok(info) => ResponseBuilder::json(201, &info),
         Err(e) => map_backend_error(&e),
     }
@@ -78,11 +81,7 @@ pub fn list_vms(req: &AuthenticatedRequest, state: &Arc<ServerState>) -> Respons
     }
 }
 
-pub fn get_vm(
-    req: &AuthenticatedRequest,
-    state: &Arc<ServerState>,
-    name: &str,
-) -> ResponseBuilder {
+pub fn get_vm(req: &AuthenticatedRequest, state: &Arc<ServerState>, name: &str) -> ResponseBuilder {
     match state.backend.get(&req.user.id, name) {
         Ok(Some(info)) => ResponseBuilder::json(200, &info),
         Ok(None) => ResponseBuilder::error(404, &format!("VM '{name}' not found")),
@@ -158,11 +157,7 @@ pub fn restore_vm(
     }
 }
 
-pub fn exec_vm(
-    req: AuthenticatedRequest,
-    state: &Arc<ServerState>,
-    name: &str,
-) -> ResponseBuilder {
+pub fn exec_vm(req: AuthenticatedRequest, state: &Arc<ServerState>, name: &str) -> ResponseBuilder {
     let body: ExecRequest = match serde_json::from_slice(&req.ctx.body) {
         Ok(b) => b,
         Err(e) => return ResponseBuilder::error(400, &format!("invalid request body: {e}")),

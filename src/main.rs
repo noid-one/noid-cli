@@ -197,7 +197,9 @@ fn shell_escape(s: &str) -> String {
     }
 
     // If the string contains no special characters, return as-is
-    if s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/') {
+    if s.chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/')
+    {
         return s.to_string();
     }
 
@@ -284,9 +286,7 @@ fn exec_via_serial(vm_name: &str, command: &[String]) -> Result<()> {
         .join(" ");
 
     // Send command wrapped in echo markers so we can parse the output
-    let wrapped = format!(
-        "echo '{marker_start}'; {escaped_cmd}; echo '{marker_end}'\n"
-    );
+    let wrapped = format!("echo '{marker_start}'; {escaped_cmd}; echo '{marker_end}'\n");
     vm::write_to_serial(vm_name, wrapped.as_bytes())?;
 
     // Poll serial.log for the end marker

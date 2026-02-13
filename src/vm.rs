@@ -26,8 +26,7 @@ fn spawn_fc(subvol: &Path) -> Result<(u32, String)> {
     let _ = std::fs::remove_file(&socket_path);
 
     // Create serial output file
-    let serial_file = std::fs::File::create(&serial_out)
-        .context("failed to create serial.log")?;
+    let serial_file = std::fs::File::create(&serial_out).context("failed to create serial.log")?;
 
     // Create named FIFO for serial input (if not already there)
     let _ = std::fs::remove_file(&serial_in);
@@ -342,12 +341,7 @@ fn fc_patch(socket_path: &str, path: &str, body: &serde_json::Value) -> Result<(
     fc_request("PATCH", socket_path, path, body)
 }
 
-fn fc_request(
-    method: &str,
-    socket_path: &str,
-    path: &str,
-    body: &serde_json::Value,
-) -> Result<()> {
+fn fc_request(method: &str, socket_path: &str, path: &str, body: &serde_json::Value) -> Result<()> {
     let body_str = serde_json::to_string(body)?;
     let request = format!(
         "{method} {path} HTTP/1.1\r\n\
@@ -410,10 +404,7 @@ fn fc_request(
     if (200..300).contains(&status_code) {
         Ok(())
     } else {
-        let body = response
-            .split("\r\n\r\n")
-            .nth(1)
-            .unwrap_or("unknown error");
+        let body = response.split("\r\n\r\n").nth(1).unwrap_or("unknown error");
         bail!("Firecracker API error (HTTP {status_code}): {body}")
     }
 }

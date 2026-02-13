@@ -168,8 +168,8 @@ fn main() -> Result<()> {
     cleanup_orphaned_taps();
 
     // Bind Unix socket
-    let listener = UnixListener::bind(SOCKET_PATH)
-        .with_context(|| format!("failed to bind {SOCKET_PATH}"))?;
+    let listener =
+        UnixListener::bind(SOCKET_PATH).with_context(|| format!("failed to bind {SOCKET_PATH}"))?;
 
     // Set socket permissions: owner=root, group+other can connect
     // The firecracker user needs to be able to connect

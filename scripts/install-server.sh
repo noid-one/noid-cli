@@ -385,7 +385,7 @@ GCEOF
 
         # Write template config for compatibility checking
         cat > "${GOLDEN_DIR}/config.json" << CONFEOF
-{"cpus": 1, "mem_mib": 128}
+{"cpus": 1, "mem_mib": 128, "snapshot_rootfs_path": "${VM_DIR}/rootfs.ext4"}
 CONFEOF
         chown -R firecracker:firecracker "$GOLDEN_DIR"
         echo "    Golden snapshot saved to ${GOLDEN_DIR}"

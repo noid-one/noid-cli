@@ -47,9 +47,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
                 break;
             }
             Ok(_) => {}
-            Err(tungstenite::Error::Io(ref e))
-                if e.kind() == std::io::ErrorKind::WouldBlock =>
-            {
+            Err(tungstenite::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 // No data available, continue
             }
             Err(_) => break,
@@ -59,9 +57,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
                 // Ctrl+Q to detach
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('q')
-                {
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
                     break;
                 }
 
@@ -89,10 +85,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn set_ws_nonblocking(
-    ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    nonblocking: bool,
-) {
+fn set_ws_nonblocking(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>, nonblocking: bool) {
     if let MaybeTlsStream::Plain(stream) = ws.get_mut() {
         let _ = stream.set_nonblocking(nonblocking);
     }

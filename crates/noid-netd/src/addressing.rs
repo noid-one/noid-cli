@@ -5,7 +5,6 @@
 /// index 1 → 172.16.0.4/30 (host .5, guest .6)
 /// ...
 
-
 #[derive(Debug, Clone)]
 pub struct NetConfig {
     pub tap_name: String,
@@ -22,7 +21,11 @@ pub fn derive_config(index: u32) -> NetConfig {
 
     let host_ip = format!("172.16.{}.{}", hi, lo.wrapping_add(1));
     let guest_ip = format!("172.16.{}.{}", hi, lo.wrapping_add(2));
-    let guest_mac = format!("AA:FC:00:00:{:02X}:{:02X}", (index >> 8) as u8, (index & 0xFF) as u8);
+    let guest_mac = format!(
+        "AA:FC:00:00:{:02X}:{:02X}",
+        (index >> 8) as u8,
+        (index & 0xFF) as u8
+    );
     let tap_name = format!("noid{}", index);
 
     NetConfig {

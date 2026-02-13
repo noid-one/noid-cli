@@ -292,6 +292,24 @@ The Firecracker process exited. Check `~/.noid/storage/users/{user_id}/vms/{name
 - The VM must be in a `running` state (Firecracker process alive)
 - Ensure there is enough disk space for the snapshot
 
+### VM create fails with snapshot/rootfs `os error 2`
+
+If `POST /v1/vms` fails with a Firecracker message like:
+
+`Failed to restore devices ... backing file ... No such file or directory ... /vms/_golden/rootfs.ext4`
+
+your golden snapshot references a template rootfs path that was deleted after snapshot creation.
+
+Fix:
+
+1. Rebuild `noid-server` with the current `v0.2.5`+ restore compatibility code.
+2. Recreate the golden snapshot so `~/.noid/golden/config.json` includes `snapshot_rootfs_path`.
+
+```bash
+rm -rf ~/.noid/golden
+sudo bash scripts/install-server.sh
+```
+
 ### Schema migration errors
 
 If upgrading from an older version of noid, the database schema may be incompatible. Delete the database and recreate users:

@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "noid", about = "noid — manage remote Firecracker microVMs", version)]
+#[command(
+    name = "noid",
+    about = "noid — manage remote Firecracker microVMs",
+    version
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

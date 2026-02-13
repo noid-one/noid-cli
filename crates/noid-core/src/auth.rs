@@ -145,7 +145,10 @@ mod tests {
         let token = generate_token();
         let hash = hash_token(&token);
         assert!(verify_token(&hash, &token));
-        assert!(!verify_token(&hash, "noid_tok_0000000000000000000000000000000000000000000000000000000000000000"));
+        assert!(!verify_token(
+            &hash,
+            "noid_tok_0000000000000000000000000000000000000000000000000000000000000000"
+        ));
     }
 
     #[test]

@@ -24,11 +24,8 @@ pub fn handle_console_ws<S: Read + Write>(
         }
     };
 
-    let mut ws = tungstenite::WebSocket::from_raw_socket(
-        stream,
-        tungstenite::protocol::Role::Server,
-        None,
-    );
+    let mut ws =
+        tungstenite::WebSocket::from_raw_socket(stream, tungstenite::protocol::Role::Server, None);
 
     // Set the underlying socket to non-blocking so ws.read() returns WouldBlock
     // instead of blocking forever. The stream from tiny_http's upgrade() is
@@ -119,9 +116,7 @@ pub fn handle_console_ws<S: Read + Write>(
                 let _ = ws.send(Message::Pong(data));
             }
             Ok(_) => {}
-            Err(tungstenite::Error::Io(ref e))
-                if e.kind() == std::io::ErrorKind::WouldBlock =>
-            {
+            Err(tungstenite::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(_) => break,
@@ -140,14 +135,8 @@ fn find_socket_fd(peer: &SocketAddr) -> Option<i32> {
     for fd in 3..1024 {
         unsafe {
             let mut addr: libc::sockaddr_storage = std::mem::zeroed();
-            let mut len =
-                std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-            if libc::getpeername(
-                fd,
-                &mut addr as *mut _ as *mut libc::sockaddr,
-                &mut len,
-            ) != 0
-            {
+            let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+            if libc::getpeername(fd, &mut addr as *mut _ as *mut libc::sockaddr, &mut len) != 0 {
                 continue;
             }
             let matches = match peer {
@@ -157,8 +146,7 @@ fn find_socket_fd(peer: &SocketAddr) -> Option<i32> {
                     } else {
                         let sa = &*(&addr as *const _ as *const libc::sockaddr_in);
                         let port = u16::from_be(sa.sin_port);
-                        let ip =
-                            std::net::Ipv4Addr::from(u32::from_be(sa.sin_addr.s_addr));
+                        let ip = std::net::Ipv4Addr::from(u32::from_be(sa.sin_addr.s_addr));
                         port == v4.port() && ip == *v4.ip()
                     }
                 }

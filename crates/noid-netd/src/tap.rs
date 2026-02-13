@@ -94,7 +94,10 @@ pub fn destroy_tap(name: &str) -> Result<()> {
     if ret < 0 {
         unsafe { libc::close(fd) };
         // Interface may already be gone — not an error
-        eprintln!("TUNSETIFF for destroy of {} failed (may be gone already)", name);
+        eprintln!(
+            "TUNSETIFF for destroy of {} failed (may be gone already)",
+            name
+        );
         return Ok(());
     }
 
@@ -116,7 +119,10 @@ pub fn destroy_tap(name: &str) -> Result<()> {
 pub fn link_up(name: &str) -> Result<()> {
     let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
     if sock < 0 {
-        bail!("failed to create socket: {}", std::io::Error::last_os_error());
+        bail!(
+            "failed to create socket: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     let mut req = IfReq::new(name)?;

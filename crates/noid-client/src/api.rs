@@ -117,11 +117,7 @@ impl ApiClient {
         resp.into_json().context("failed to parse exec response")
     }
 
-    pub fn create_checkpoint(
-        &self,
-        name: &str,
-        label: Option<&str>,
-    ) -> Result<CheckpointInfo> {
+    pub fn create_checkpoint(&self, name: &str, label: Option<&str>) -> Result<CheckpointInfo> {
         let req = CheckpointRequest {
             label: label.map(|s| s.to_string()),
         };
@@ -175,7 +171,11 @@ impl ApiClient {
         let host = authority.host();
         let port = authority
             .port_u16()
-            .unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
+            .unwrap_or(if uri.scheme_str() == Some("wss") {
+                443
+            } else {
+                80
+            });
 
         let addr_str = format!("{host}:{port}");
         let sock_addr = addr_str
@@ -203,19 +203,19 @@ impl ApiClient {
             .body(())
             .context("failed to build WS request")?;
 
-        let (ws, _) = tungstenite::client::client(request, MaybeTlsStream::Plain(stream))
-            .map_err(|e| match e {
+        let (ws, _) = tungstenite::client::client(request, MaybeTlsStream::Plain(stream)).map_err(
+            |e| match e {
                 tungstenite::HandshakeError::Interrupted(_) => {
                     anyhow::anyhow!("WebSocket handshake interrupted (WouldBlock)")
                 }
                 tungstenite::HandshakeError::Failure(e) => {
                     anyhow::anyhow!("WebSocket handshake failed: {e}")
                 }
-            })?;
+            },
+        )?;
 
         Ok(ws)
     }
-
 }
 
 #[cfg(test)]
@@ -258,5 +258,4 @@ mod tests {
             "ws://localhost/v1/vms/test/console"
         );
     }
-
 }

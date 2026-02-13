@@ -53,8 +53,7 @@ pub fn setup_vm_network(index: u32) -> Result<NetworkConfig> {
 /// Ask noid-netd to tear down a TAP device.
 pub fn teardown_vm_network(tap_name: &str) -> Result<()> {
     let request = serde_json::json!({ "op": "teardown", "tap_name": tap_name });
-    let response =
-        netd_request(&request).context("failed to teardown VM network via noid-netd")?;
+    let response = netd_request(&request).context("failed to teardown VM network via noid-netd")?;
 
     if response.get("ok") != Some(&serde_json::Value::Bool(true)) {
         let err = response["error"]
@@ -76,7 +75,10 @@ pub fn allocate_index(used: &[u32]) -> Result<u32> {
             return Ok(i);
         }
     }
-    bail!("no available network indices (all {} /30 subnets in 172.16.0.0/16 exhausted)", MAX_NET_INDEX + 1)
+    bail!(
+        "no available network indices (all {} /30 subnets in 172.16.0.0/16 exhausted)",
+        MAX_NET_INDEX + 1
+    )
 }
 
 /// Build the kernel `ip=` boot parameter for the guest.

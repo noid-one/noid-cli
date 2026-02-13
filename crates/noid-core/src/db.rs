@@ -118,9 +118,9 @@ impl Db {
     }
 
     pub fn get_user_by_name(&self, name: &str) -> Result<Option<UserRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, token_hash, created_at FROM users WHERE name = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, token_hash, created_at FROM users WHERE name = ?1")?;
         let mut rows = stmt.query_map(params![name], |row| {
             Ok(UserRecord {
                 id: row.get(0)?,
@@ -136,9 +136,9 @@ impl Db {
     }
 
     pub fn get_user_by_id(&self, id: &str) -> Result<Option<UserRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, token_hash, created_at FROM users WHERE id = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, token_hash, created_at FROM users WHERE id = ?1")?;
         let mut rows = stmt.query_map(params![id], |row| {
             Ok(UserRecord {
                 id: row.get(0)?,
@@ -157,9 +157,9 @@ impl Db {
     /// SHA-256 is deterministic, so we can do an O(1) lookup by hash.
     pub fn authenticate_user(&self, token: &str) -> Result<Option<UserRecord>> {
         let token_hash = crate::auth::hash_token(token);
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, token_hash, created_at FROM users WHERE token_hash = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, token_hash, created_at FROM users WHERE token_hash = ?1")?;
         let mut rows = stmt.query_map(params![token_hash], |row| {
             Ok(UserRecord {
                 id: row.get(0)?,
@@ -175,9 +175,9 @@ impl Db {
     }
 
     pub fn list_users(&self) -> Result<Vec<UserRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, token_hash, created_at FROM users ORDER BY created_at",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, token_hash, created_at FROM users ORDER BY created_at")?;
         let rows = stmt.query_map([], |row| {
             Ok(UserRecord {
                 id: row.get(0)?,
@@ -357,11 +357,7 @@ impl Db {
         }
     }
 
-    pub fn list_checkpoints(
-        &self,
-        user_id: &str,
-        vm_name: &str,
-    ) -> Result<Vec<CheckpointRecord>> {
+    pub fn list_checkpoints(&self, user_id: &str, vm_name: &str) -> Result<Vec<CheckpointRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, vm_name, user_id, label, snapshot_path, created_at
              FROM checkpoints WHERE user_id = ?1 AND vm_name = ?2 ORDER BY created_at",

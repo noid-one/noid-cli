@@ -175,7 +175,8 @@ mod tests {
 
     #[test]
     fn parse_marked_output_accepts_lf_line_endings() {
-        let serial = "echo 'cmd'\nNOID_EXEC_1234\nhello\nNOID_EXEC_1234_EXIT0\nNOID_EXEC_1234_END\n";
+        let serial =
+            "echo 'cmd'\nNOID_EXEC_1234\nhello\nNOID_EXEC_1234_EXIT0\nNOID_EXEC_1234_END\n";
         let parsed = parse_marked_output(
             serial,
             "NOID_EXEC_1234",

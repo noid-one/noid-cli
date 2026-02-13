@@ -26,12 +26,17 @@ struct IfReqAddr {
 
 /// Assign an IPv4 address and netmask to an interface.
 pub fn assign_ip(ifname: &str, ip: &str, prefix_len: u8) -> Result<()> {
-    let addr: Ipv4Addr = ip.parse().map_err(|e| anyhow::anyhow!("invalid IP {}: {}", ip, e))?;
+    let addr: Ipv4Addr = ip
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid IP {}: {}", ip, e))?;
     let mask = prefix_to_mask(prefix_len);
 
     let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
     if sock < 0 {
-        bail!("failed to create socket: {}", std::io::Error::last_os_error());
+        bail!(
+            "failed to create socket: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     // Set address

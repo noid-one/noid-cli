@@ -160,17 +160,11 @@ pub fn reflink_rootfs(user_id: &str, vm_name: &str, rootfs_src: &str) -> Result<
 }
 
 /// Create a snapshot (checkpoint) — user-namespaced
-pub fn create_snapshot(
-    user_id: &str,
-    vm_name: &str,
-    checkpoint_id: &str,
-) -> Result<PathBuf> {
+pub fn create_snapshot(user_id: &str, vm_name: &str, checkpoint_id: &str) -> Result<PathBuf> {
     validate_name(vm_name, "VM")?;
     validate_name(checkpoint_id, "Checkpoint")?;
     let src = vm_dir(user_id, vm_name);
-    let snap_dir = user_storage_dir(user_id)
-        .join("checkpoints")
-        .join(vm_name);
+    let snap_dir = user_storage_dir(user_id).join("checkpoints").join(vm_name);
     std::fs::create_dir_all(&snap_dir)?;
     let snap = snap_dir.join(checkpoint_id);
 
@@ -186,17 +180,16 @@ pub fn create_snapshot(
             ],
         )?;
     } else {
-        run_cmd("cp", &["-a", &src.to_string_lossy(), &snap.to_string_lossy()])?;
+        run_cmd(
+            "cp",
+            &["-a", &src.to_string_lossy(), &snap.to_string_lossy()],
+        )?;
     }
     Ok(snap)
 }
 
 /// Clone a checkpoint to a new VM — user-namespaced
-pub fn clone_snapshot(
-    user_id: &str,
-    checkpoint_path: &str,
-    new_vm_name: &str,
-) -> Result<PathBuf> {
+pub fn clone_snapshot(user_id: &str, checkpoint_path: &str, new_vm_name: &str) -> Result<PathBuf> {
     validate_name(new_vm_name, "VM")?;
     let dest = vm_dir(user_id, new_vm_name);
     if dest.exists() {
@@ -239,9 +232,24 @@ pub fn golden_config() -> Result<(u32, u32)> {
         .with_context(|| format!("failed to read golden config: {}", config_path.display()))?;
     let v: serde_json::Value =
         serde_json::from_str(&data).context("failed to parse golden config.json")?;
-    let cpus = v["cpus"].as_u64().context("missing cpus in golden config")? as u32;
-    let mem_mib = v["mem_mib"].as_u64().context("missing mem_mib in golden config")? as u32;
+    let cpus = v["cpus"]
+        .as_u64()
+        .context("missing cpus in golden config")? as u32;
+    let mem_mib = v["mem_mib"]
+        .as_u64()
+        .context("missing mem_mib in golden config")? as u32;
     Ok((cpus, mem_mib))
+}
+
+/// Read optional source rootfs path embedded in golden config.
+/// This is the backing file path originally captured in vmstate.snap.
+pub fn golden_snapshot_rootfs_path() -> Result<Option<String>> {
+    let config_path = golden_dir().join("config.json");
+    let data = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read golden config: {}", config_path.display()))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&data).context("failed to parse golden config.json")?;
+    Ok(v["snapshot_rootfs_path"].as_str().map(|s| s.to_string()))
 }
 
 /// Clone golden snapshot files into a new VM directory.
@@ -295,10 +303,7 @@ pub fn delete_subvolume(user_id: &str, vm_name: &str) -> Result<()> {
     let dir = vm_dir(user_id, vm_name);
     if dir.exists() {
         if is_btrfs_mounted(&storage_dir()) {
-            run_cmd(
-                "btrfs",
-                &["subvolume", "delete", &dir.to_string_lossy()],
-            )?;
+            run_cmd("btrfs", &["subvolume", "delete", &dir.to_string_lossy()])?;
         } else {
             std::fs::remove_dir_all(&dir)?;
         }
@@ -358,10 +363,7 @@ mod tests {
     fn validate_name_rejects_path_traversal() {
         let cases = ["../etc/passwd", "foo/bar", "a\\b", "foo..bar"];
         for name in cases {
-            assert!(
-                validate_name(name, "VM").is_err(),
-                "should reject: {name}"
-            );
+            assert!(validate_name(name, "VM").is_err(), "should reject: {name}");
         }
     }
 

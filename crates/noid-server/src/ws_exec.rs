@@ -12,11 +12,8 @@ pub fn handle_exec_ws<S: Read + Write>(
     user: &UserRecord,
     vm_name: &str,
 ) {
-    let mut ws = tungstenite::WebSocket::from_raw_socket(
-        stream,
-        tungstenite::protocol::Role::Server,
-        None,
-    );
+    let mut ws =
+        tungstenite::WebSocket::from_raw_socket(stream, tungstenite::protocol::Role::Server, None);
 
     // Read the ExecRequest (first text frame)
     let exec_req: ExecRequest = match ws.read() {

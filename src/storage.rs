@@ -76,8 +76,16 @@ pub fn ensure_storage() -> Result<()> {
     let img = loopback_path();
     if img.exists()
         && btrfs_available()
-        && run_cmd("mount", &["-o", "loop", &img.to_string_lossy(), &storage.to_string_lossy()])
-            .is_ok()
+        && run_cmd(
+            "mount",
+            &[
+                "-o",
+                "loop",
+                &img.to_string_lossy(),
+                &storage.to_string_lossy(),
+            ],
+        )
+        .is_ok()
     {
         return Ok(());
     }
@@ -87,14 +95,23 @@ pub fn ensure_storage() -> Result<()> {
         std::fs::create_dir_all(&storage)?;
         if run_cmd(
             "truncate",
-            &["-s", &format!("{LOOPBACK_SIZE_MB}M"), &img.to_string_lossy()],
+            &[
+                "-s",
+                &format!("{LOOPBACK_SIZE_MB}M"),
+                &img.to_string_lossy(),
+            ],
         )
         .is_ok()
         {
             if run_cmd("mkfs.btrfs", &["-f", &img.to_string_lossy()]).is_ok()
                 && run_cmd(
                     "mount",
-                    &["-o", "loop", &img.to_string_lossy(), &storage.to_string_lossy()],
+                    &[
+                        "-o",
+                        "loop",
+                        &img.to_string_lossy(),
+                        &storage.to_string_lossy(),
+                    ],
                 )
                 .is_ok()
             {
@@ -165,7 +182,10 @@ pub fn create_snapshot(vm_name: &str, checkpoint_id: &str) -> Result<PathBuf> {
         )?;
     } else {
         // Fallback: recursive copy
-        run_cmd("cp", &["-a", &src.to_string_lossy(), &snap.to_string_lossy()])?;
+        run_cmd(
+            "cp",
+            &["-a", &src.to_string_lossy(), &snap.to_string_lossy()],
+        )?;
     }
     Ok(snap)
 }
@@ -203,10 +223,7 @@ pub fn delete_subvolume(vm_name: &str) -> Result<()> {
     let dir = storage_dir().join("vms").join(vm_name);
     if dir.exists() {
         if is_btrfs_mounted(&storage_dir()) {
-            run_cmd(
-                "btrfs",
-                &["subvolume", "delete", &dir.to_string_lossy()],
-            )?;
+            run_cmd("btrfs", &["subvolume", "delete", &dir.to_string_lossy()])?;
         } else {
             std::fs::remove_dir_all(&dir)?;
         }
@@ -265,10 +282,7 @@ mod tests {
     fn validate_name_rejects_path_traversal() {
         let cases = ["../etc/passwd", "foo/bar", "a\\b", "foo..bar"];
         for name in cases {
-            assert!(
-                validate_name(name, "VM").is_err(),
-                "should reject: {name}"
-            );
+            assert!(validate_name(name, "VM").is_err(), "should reject: {name}");
         }
     }
 

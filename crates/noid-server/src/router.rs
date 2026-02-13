@@ -59,10 +59,7 @@ struct LogEntry<'a> {
 }
 
 /// Route a request to the appropriate handler. Returns (handler_name, response).
-pub fn route(
-    ctx: RequestContext,
-    state: &Arc<crate::ServerState>,
-) -> (String, ResponseBuilder) {
+pub fn route(ctx: RequestContext, state: &Arc<crate::ServerState>) -> (String, ResponseBuilder) {
     let start = Instant::now();
     let method = ctx.method.clone();
     let path = ctx.path.clone();
@@ -75,8 +72,13 @@ pub fn route(
         ("GET", "/healthz") => {
             let resp = crate::handlers::healthz();
             log_request(&LogEntry {
-                request_id: &request_id, user: None, method: &method,
-                path: &path, status: resp.status, start, remote_addr: &remote,
+                request_id: &request_id,
+                user: None,
+                method: &method,
+                path: &path,
+                status: resp.status,
+                start,
+                remote_addr: &remote,
                 forwarded_for: &forwarded,
             });
             return ("healthz".into(), resp);
@@ -84,8 +86,13 @@ pub fn route(
         ("GET", "/version") => {
             let resp = crate::handlers::version();
             log_request(&LogEntry {
-                request_id: &request_id, user: None, method: &method,
-                path: &path, status: resp.status, start, remote_addr: &remote,
+                request_id: &request_id,
+                user: None,
+                method: &method,
+                path: &path,
+                status: resp.status,
+                start,
+                remote_addr: &remote,
                 forwarded_for: &forwarded,
             });
             return ("version".into(), resp);
@@ -98,8 +105,13 @@ pub fn route(
         Ok(u) => u,
         Err(resp) => {
             log_request(&LogEntry {
-                request_id: &request_id, user: None, method: &method,
-                path: &path, status: resp.status, start, remote_addr: &remote,
+                request_id: &request_id,
+                user: None,
+                method: &method,
+                path: &path,
+                status: resp.status,
+                start,
+                remote_addr: &remote,
                 forwarded_for: &forwarded,
             });
             return ("auth_failed".into(), resp);
@@ -108,15 +120,17 @@ pub fn route(
 
     let user_name = user.name.clone();
 
-    let auth_req = AuthenticatedRequest {
-        ctx,
-        user,
-    };
+    let auth_req = AuthenticatedRequest { ctx, user };
 
     let resp = route_authenticated(auth_req, state);
     log_request(&LogEntry {
-        request_id: &request_id, user: Some(&user_name), method: &method,
-        path: &path, status: resp.status, start, remote_addr: &remote,
+        request_id: &request_id,
+        user: Some(&user_name),
+        method: &method,
+        path: &path,
+        status: resp.status,
+        start,
+        remote_addr: &remote,
         forwarded_for: &forwarded,
     });
 
@@ -194,7 +208,13 @@ fn log_request(entry: &LogEntry) {
     let fwd = entry.forwarded_for.as_deref().unwrap_or("-");
     eprintln!(
         "[{}] {} {} {} -> {} ({}ms) remote={} fwd={}",
-        entry.request_id, user_str, entry.method, entry.path,
-        entry.status, duration, entry.remote_addr, fwd
+        entry.request_id,
+        user_str,
+        entry.method,
+        entry.path,
+        entry.status,
+        duration,
+        entry.remote_addr,
+        fwd
     );
 }

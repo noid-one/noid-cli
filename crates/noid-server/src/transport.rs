@@ -47,7 +47,10 @@ pub fn from_tiny_http(
 ) -> RequestContext {
     let method = request.method().to_string();
     let path = request.url().to_string();
-    let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_default();
+    let remote_addr = request
+        .remote_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default();
 
     let mut headers = HashMap::new();
     for h in request.headers() {
@@ -124,7 +127,10 @@ mod tests {
     fn response_builder_json_sets_content_type() {
         let resp = ResponseBuilder::json(200, &serde_json::json!({"ok": true}));
         assert_eq!(resp.status, 200);
-        assert!(resp.headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(resp
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
         let parsed: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(parsed["ok"], true);
     }
