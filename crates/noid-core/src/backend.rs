@@ -298,8 +298,7 @@ impl FirecrackerBackend {
         vm_dir: &std::path::Path,
         net_config: &network::NetworkConfig,
     ) -> Result<()> {
-        // Use one non-interactive sudo invocation so we fail fast instead of
-        // hanging on a password prompt in serial mode.
+        // Serial console auto-logins as root, so no sudo needed.
         let cmd_str = format!(
             "ip addr flush dev eth0 && \
              ip addr add {}/30 dev eth0 && \
@@ -308,8 +307,6 @@ impl FirecrackerBackend {
             net_config.guest_ip, net_config.host_ip
         );
         let cmd = vec![
-            "sudo".to_string(),
-            "-n".to_string(),
             "sh".to_string(),
             "-c".to_string(),
             cmd_str,

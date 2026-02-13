@@ -222,7 +222,7 @@ mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
 cat > /etc/systemd/system/serial-getty@ttyS0.service.d/override.conf << 'EOF'
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty --autologin noid --keep-baud 115200,57600,38400,9600 ttyS0 $TERM
+ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,57600,38400,9600 ttyS0 $TERM
 EOF
 systemctl enable serial-getty@ttyS0.service
 
