@@ -6,8 +6,8 @@ use crate::transport::ResponseBuilder;
 use crate::ServerState;
 
 /// Map a backend error to an HTTP response. Known error patterns (not found,
-/// already exists) get specific status codes with the message passed through.
-/// Unknown errors get a generic 500 — details are logged server-side only.
+/// already exists) get specific status codes; all others become 500s.
+/// The error message is always passed through to the client.
 fn map_backend_error(e: &anyhow::Error) -> ResponseBuilder {
     let msg = e.to_string();
     if msg.contains("not found") {
@@ -16,7 +16,7 @@ fn map_backend_error(e: &anyhow::Error) -> ResponseBuilder {
         ResponseBuilder::error(409, &msg)
     } else {
         eprintln!("internal error: {e:#}");
-        ResponseBuilder::error(500, "internal server error")
+        ResponseBuilder::error(500, &msg)
     }
 }
 
@@ -217,12 +217,11 @@ mod tests {
     }
 
     #[test]
-    fn map_backend_error_unknown_gives_generic_500() {
-        let err = anyhow::anyhow!("disk I/O failure at /secret/path");
+    fn map_backend_error_unknown_passes_message() {
+        let err = anyhow::anyhow!("cp failed: No space left on device");
         let resp = map_backend_error(&err);
         assert_eq!(resp.status, 500);
         let body: ErrorResponse = serde_json::from_slice(&resp.body).unwrap();
-        assert_eq!(body.error, "internal server error");
-        assert!(!body.error.contains("/secret/path"));
+        assert_eq!(body.error, "cp failed: No space left on device");
     }
 }
