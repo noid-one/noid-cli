@@ -28,12 +28,7 @@ pub trait VmBackend: Send + Sync {
         name: &str,
         command: &[String],
     ) -> Result<(String, ExecResult)>;
-    fn checkpoint(
-        &self,
-        user_id: &str,
-        name: &str,
-        label: Option<&str>,
-    ) -> Result<CheckpointInfo>;
+    fn checkpoint(&self, user_id: &str, name: &str, label: Option<&str>) -> Result<CheckpointInfo>;
     fn list_checkpoints(&self, user_id: &str, name: &str) -> Result<Vec<CheckpointInfo>>;
     fn restore(
         &self,
@@ -191,18 +186,43 @@ impl FirecrackerBackend {
 
         // Load snapshot, patch drive/network to point at new resources, resume
         let rootfs_path = subvol.join("rootfs.ext4");
+        let snapshot_rootfs_hint = match storage::golden_snapshot_rootfs_path() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("warning: failed to read golden snapshot rootfs path: {e:#}");
+                None
+            }
+        }
+        .or_else(|| vm::extract_rootfs_path_from_vmstate(&subvol));
+        let rootfs_alias = snapshot_rootfs_hint
+            .as_deref()
+            .and_then(|p| {
+                match vm::ensure_snapshot_rootfs_path(p, &rootfs_path.to_string_lossy()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("warning: failed to create snapshot rootfs alias: {e:#}");
+                        None
+                    }
+                }
+            });
         if let Err(e) = vm::load_and_restore_snapshot(
             &sock,
             &subvol,
             &rootfs_path.to_string_lossy(),
             net_config.as_ref(),
         ) {
+            if let Some(alias) = rootfs_alias.as_ref() {
+                let _ = std::fs::remove_file(alias);
+            }
             vm::kill_vm_process(pid as i64);
             if let Some(ref nc) = net_config {
                 let _ = network::teardown_vm_network(&nc.tap_name);
             }
             let _ = storage::delete_subvolume(user_id, name);
             return Err(e);
+        }
+        if let Some(alias) = rootfs_alias.as_ref() {
+            let _ = std::fs::remove_file(alias);
         }
 
         // Reconfigure guest network (snapshot has old template IP)
@@ -283,7 +303,8 @@ impl FirecrackerBackend {
                 net_config.guest_ip, net_config.host_ip
             ),
         ];
-        let (_, exit_code, timed_out, _) = exec::exec_via_serial(vm_dir, &cmd, self.exec_timeout_secs)?;
+        let (_, exit_code, timed_out, _) =
+            exec::exec_via_serial(vm_dir, &cmd, self.exec_timeout_secs)?;
         if timed_out {
             bail!("network reconfiguration timed out");
         }
@@ -297,9 +318,7 @@ impl FirecrackerBackend {
     }
 
     fn vm_to_info(rec: &db::VmRecord) -> VmInfo {
-        let alive = rec
-            .pid
-            .is_some_and(|pid| vm::is_process_alive(pid as i32));
+        let alive = rec.pid.is_some_and(|pid| vm::is_process_alive(pid as i32));
         let state = if alive {
             rec.state.clone()
         } else {
@@ -403,12 +422,7 @@ impl VmBackend for FirecrackerBackend {
         ))
     }
 
-    fn checkpoint(
-        &self,
-        user_id: &str,
-        name: &str,
-        label: Option<&str>,
-    ) -> Result<CheckpointInfo> {
+    fn checkpoint(&self, user_id: &str, name: &str, label: Option<&str>) -> Result<CheckpointInfo> {
         let lock = self.vm_lock(user_id, name);
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -466,6 +480,7 @@ impl VmBackend for FirecrackerBackend {
             .get_checkpoint(user_id, checkpoint_id)?
             .ok_or_else(|| anyhow::anyhow!("checkpoint '{checkpoint_id}' not found"))?;
 
+        let orig_vm = self.db().get_vm(user_id, &checkpoint.vm_name)?;
         let target_name = new_name.unwrap_or(name);
         storage::validate_name(target_name, "VM")?;
 
@@ -509,26 +524,48 @@ impl VmBackend for FirecrackerBackend {
                 if let Some(ref nc) = net_config {
                     let _ = network::teardown_vm_network(&nc.tap_name);
                 }
+                let _ = storage::delete_subvolume(user_id, target_name);
                 return Err(e);
             }
         };
 
         // Load snapshot, patch drive/network to point at new resources, resume
         let rootfs_path_for_restore = subvol.join("rootfs.ext4");
+        let snapshot_rootfs_hint = orig_vm
+            .as_ref()
+            .map(|rec| rec.rootfs.clone())
+            .or_else(|| vm::extract_rootfs_path_from_vmstate(&subvol));
+        let rootfs_alias = snapshot_rootfs_hint
+            .as_deref()
+            .and_then(|p| {
+                match vm::ensure_snapshot_rootfs_path(p, &rootfs_path_for_restore.to_string_lossy())
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("warning: failed to create snapshot rootfs alias: {e:#}");
+                        None
+                    }
+                }
+            });
         if let Err(e) = vm::load_and_restore_snapshot(
             &socket_path,
             &subvol,
             &rootfs_path_for_restore.to_string_lossy(),
             net_config.as_ref(),
         ) {
+            if let Some(alias) = rootfs_alias.as_ref() {
+                let _ = std::fs::remove_file(alias);
+            }
             vm::kill_vm_process(pid as i64);
             if let Some(ref nc) = net_config {
                 let _ = network::teardown_vm_network(&nc.tap_name);
             }
+            let _ = storage::delete_subvolume(user_id, target_name);
             return Err(e);
         }
-
-        let orig_vm = self.db().get_vm(user_id, &checkpoint.vm_name)?;
+        if let Some(alias) = rootfs_alias.as_ref() {
+            let _ = std::fs::remove_file(alias);
+        }
         let (kernel, rootfs_path, cpus, mem_mib) = if let Some(ref orig) = orig_vm {
             (
                 orig.kernel.clone(),

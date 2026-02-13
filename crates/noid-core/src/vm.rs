@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -23,8 +23,7 @@ pub fn spawn_fc(subvol: &Path) -> Result<(u32, String)> {
     let _ = std::fs::remove_file(&socket_path);
 
     // Create serial output file
-    let serial_file =
-        std::fs::File::create(&serial_out).context("failed to create serial.log")?;
+    let serial_file = std::fs::File::create(&serial_out).context("failed to create serial.log")?;
 
     // Create named FIFO for serial input (if not already there)
     let _ = std::fs::remove_file(&serial_in);
@@ -262,7 +261,9 @@ pub fn configure_and_start_vm(
     .context("failed to set machine config")?;
 
     // Build boot args — append kernel ip= param if networking is configured
-    let mut boot_args = "console=ttyS0 reboot=k panic=1 pci=off quiet loglevel=1 systemd.show_status=auto".to_string();
+    let mut boot_args =
+        "console=ttyS0 reboot=k panic=1 pci=off quiet loglevel=1 systemd.show_status=auto"
+            .to_string();
     if let Some(net_config) = net {
         boot_args.push(' ');
         boot_args.push_str(&crate::network::kernel_ip_param(net_config));
@@ -316,6 +317,94 @@ pub fn configure_and_start_vm(
     Ok(())
 }
 
+/// Ensure the rootfs path referenced inside a snapshot exists at load time.
+///
+/// Firecracker may need to open the original backing-file path during
+/// `/snapshot/load`, before we can patch `/drives/rootfs` to the new VM path.
+/// If that source path is missing, create a temporary symlink to `actual_rootfs`.
+/// Returns the symlink path if one was created.
+pub fn ensure_snapshot_rootfs_path(
+    source_rootfs_path: &str,
+    actual_rootfs_path: &str,
+) -> Result<Option<PathBuf>> {
+    if source_rootfs_path == actual_rootfs_path {
+        return Ok(None);
+    }
+
+    let source = Path::new(source_rootfs_path);
+
+    // Validate that source path is inside noid storage to prevent path traversal
+    let storage_prefix = crate::storage::storage_dir();
+    if !source.is_absolute() || !source.starts_with(&storage_prefix) {
+        bail!(
+            "snapshot rootfs path is outside noid storage: {}",
+            source.display()
+        );
+    }
+
+    if source.exists() {
+        return Ok(None);
+    }
+
+    let actual = Path::new(actual_rootfs_path);
+    if !actual.exists() {
+        bail!("actual restore rootfs does not exist: {}", actual.display());
+    }
+
+    if let Some(parent) = source.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::os::unix::fs::symlink(actual, source).with_context(|| {
+        format!(
+            "failed to create rootfs alias {} -> {}",
+            source.display(),
+            actual.display()
+        )
+    })?;
+
+    Ok(Some(source.to_path_buf()))
+}
+
+/// Best-effort extraction of a rootfs path embedded in vmstate.snap.
+/// Used as a compatibility fallback for snapshots created before metadata was stored.
+pub fn extract_rootfs_path_from_vmstate(snap_dir: &Path) -> Option<String> {
+    const MAX_VMSTATE_SIZE: u64 = 256 * 1024 * 1024; // 256 MB
+    let vmstate = snap_dir.join("vmstate.snap");
+    let meta = std::fs::metadata(&vmstate).ok()?;
+    if meta.len() > MAX_VMSTATE_SIZE {
+        return None;
+    }
+    let bytes = std::fs::read(vmstate).ok()?;
+    let needle = b"/rootfs.ext4";
+    let mut i = 0usize;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let mut start = i;
+            while start > 0 && is_path_byte(bytes[start - 1]) {
+                start -= 1;
+            }
+            if start < i {
+                let raw = String::from_utf8_lossy(&bytes[start..i + needle.len()]).to_string();
+                if let Some(pos) = raw.find('/') {
+                    let s = raw[pos..].to_string();
+                    if s.starts_with('/') && s.contains("/.noid/") {
+                        return Some(s);
+                    }
+                }
+            }
+            i += needle.len();
+            continue;
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_path_byte(b: u8) -> bool {
+    matches!(b, b'/' | b'.' | b'_' | b'-') || b.is_ascii_alphanumeric()
+}
+
 // --- Helpers ---
 
 fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {
@@ -329,12 +418,28 @@ fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {
     bail!("timed out waiting for socket at {}", path.display())
 }
 
-fn fc_request(
-    method: &str,
-    socket_path: &str,
-    path: &str,
-    body: &serde_json::Value,
-) -> Result<()> {
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_rootfs_path_from_vmstate_finds_embedded_path() {
+        let dir = std::env::temp_dir().join(format!("noid-vmtest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let vmstate = dir.join("vmstate.snap");
+        let payload = b"abc/home/firecracker/.noid/storage/users/u/vms/_golden/rootfs.ext4xyz";
+        std::fs::write(&vmstate, payload).unwrap();
+        let found = extract_rootfs_path_from_vmstate(&dir).unwrap();
+        assert_eq!(
+            found,
+            "/home/firecracker/.noid/storage/users/u/vms/_golden/rootfs.ext4"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+fn fc_request(method: &str, socket_path: &str, path: &str, body: &serde_json::Value) -> Result<()> {
     let body_str = serde_json::to_string(body)?;
     let request = format!(
         "{method} {path} HTTP/1.1\r\n\
@@ -397,10 +502,7 @@ fn fc_request(
     if (200..300).contains(&status_code) {
         Ok(())
     } else {
-        let body = response
-            .split("\r\n\r\n")
-            .nth(1)
-            .unwrap_or("unknown error");
+        let body = response.split("\r\n\r\n").nth(1).unwrap_or("unknown error");
         bail!("Firecracker API error (HTTP {status_code}): {body}")
     }
 }
