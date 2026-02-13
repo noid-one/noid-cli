@@ -241,7 +241,11 @@ systemctl mask systemd-resolved.service 2>/dev/null || true
 systemctl disable cron.service 2>/dev/null || true
 systemctl disable rsyslog.service 2>/dev/null || true
 systemctl mask getty@tty1.service
-systemctl mask systemd-timesyncd.service
+# timesyncd keeps the guest clock accurate (required for TLS cert validation).
+# On snapshot restore the clock is stale; reconfigure_guest_network sets it
+# from the host, and timesyncd keeps it drifting-free long-term.
+systemctl unmask systemd-timesyncd.service 2>/dev/null || true
+systemctl enable systemd-timesyncd.service 2>/dev/null || true
 systemctl mask e2scrub_all.timer
 systemctl mask fstrim.timer
 systemctl mask logrotate.timer

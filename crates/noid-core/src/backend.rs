@@ -299,12 +299,19 @@ impl FirecrackerBackend {
         net_config: &network::NetworkConfig,
     ) -> Result<()> {
         // Serial console auto-logins as root, so no sudo needed.
+        // After snapshot restore the guest clock is stale (baked from golden snapshot),
+        // which breaks TLS cert validation. Set it from the host before anything else.
+        let host_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let cmd_str = format!(
-            "ip addr flush dev eth0 && \
+            "date -s @{} >/dev/null 2>&1; \
+             ip addr flush dev eth0 && \
              ip addr add {}/30 dev eth0 && \
              ip link set eth0 up && \
              ip route replace default via {}",
-            net_config.guest_ip, net_config.host_ip
+            host_epoch, net_config.guest_ip, net_config.host_ip
         );
         let cmd = vec![
             "sh".to_string(),
