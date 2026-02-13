@@ -163,11 +163,11 @@ pub fn create_fc_snapshot(socket_path: &str, snap_dir: &Path) -> Result<()> {
     .context("failed to create FC snapshot")
 }
 
-/// Load a Firecracker snapshot without resuming, patch resources to point at
-/// the new VM's rootfs and TAP device, then resume.
+/// Load a Firecracker snapshot, resume with new rootfs and TAP device.
 ///
-/// Firecracker requires: load snapshot first, THEN PUT/patch resources, THEN resume.
-/// Configuring boot resources before snapshot load is rejected with HTTP 400.
+/// Networking is remapped via `network_overrides` inside the snapshot load
+/// request — Firecracker does not allow PUT/PATCH on network interfaces
+/// either before or after snapshot load as separate API calls.
 pub fn load_and_restore_snapshot(
     socket_path: &str,
     snap_dir: &Path,
@@ -177,21 +177,25 @@ pub fn load_and_restore_snapshot(
     let mem_path = snap_dir.join("memory.snap");
     let state_path = snap_dir.join("vmstate.snap");
 
-    // 1. Load snapshot WITHOUT resuming
-    fc_put(
-        socket_path,
-        "/snapshot/load",
-        &serde_json::json!({
-            "snapshot_path": state_path.to_string_lossy(),
-            "mem_backend": {
-                "backend_path": mem_path.to_string_lossy(),
-                "backend_type": "File"
-            },
-            "enable_diff_snapshots": false,
-            "resume_vm": false
-        }),
-    )
-    .context("failed to load FC snapshot")?;
+    // 1. Load snapshot WITHOUT resuming. If networking is configured, pass
+    //    network_overrides to remap the TAP device for this clone.
+    let mut load_body = serde_json::json!({
+        "snapshot_path": state_path.to_string_lossy(),
+        "mem_backend": {
+            "backend_path": mem_path.to_string_lossy(),
+            "backend_type": "File"
+        },
+        "enable_diff_snapshots": false,
+        "resume_vm": false
+    });
+    if let Some(net_config) = net {
+        load_body["network_overrides"] = serde_json::json!([{
+            "iface_id": "eth0",
+            "host_dev_name": net_config.tap_name
+        }]);
+    }
+    fc_put(socket_path, "/snapshot/load", &load_body)
+        .context("failed to load FC snapshot")?;
 
     // 2. PATCH drive to point at new rootfs copy
     fc_patch(
@@ -204,21 +208,7 @@ pub fn load_and_restore_snapshot(
     )
     .context("failed to patch root drive after restore")?;
 
-    // 3. PUT network interface to bind to new TAP device
-    if let Some(net_config) = net {
-        fc_put(
-            socket_path,
-            "/network-interfaces/eth0",
-            &serde_json::json!({
-                "iface_id": "eth0",
-                "guest_mac": net_config.guest_mac,
-                "host_dev_name": net_config.tap_name
-            }),
-        )
-        .context("failed to update network interface after restore")?;
-    }
-
-    // 4. Resume VM
+    // 3. Resume VM
     resume_vm(socket_path)?;
 
     Ok(())
