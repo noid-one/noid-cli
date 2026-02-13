@@ -156,7 +156,7 @@ WS frames use 1-byte channel prefix: `0x01`=stdout, `0x02`=stderr, `0x03`=stdin.
 ```toml
 listen = "0.0.0.0:7654"
 kernel = "/home/firecracker/vmlinux.bin"
-rootfs = "/home/firecracker/rootfs-ubuntu2404.ext4"
+rootfs = "/home/firecracker/rootfs.ext4"
 max_ws_sessions = 32
 trust_forwarded_for = false
 exec_timeout_secs = 30
@@ -222,4 +222,4 @@ Three tables:
 ## Test Images
 
 - Kernel: `~/vmlinux.bin`
-- Rootfs: `~/rootfs-ubuntu2404.ext4` (Ubuntu 24.04 LTS, built by install.sh)
+- Rootfs: `~/rootfs.ext4` (Ubuntu 25.04, built by install.sh)

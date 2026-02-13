@@ -202,7 +202,7 @@ pub fn configure_and_start_vm(
     .context("failed to set machine config")?;
 
     // Build boot args — append kernel ip= param if networking is configured
-    let mut boot_args = "console=ttyS0 reboot=k panic=1 pci=off".to_string();
+    let mut boot_args = "console=ttyS0 reboot=k panic=1 pci=off quiet loglevel=1 systemd.show_status=auto".to_string();
     if let Some(net_config) = net {
         boot_args.push(' ');
         boot_args.push_str(&crate::network::kernel_ip_param(net_config));

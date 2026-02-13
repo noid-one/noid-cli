@@ -51,16 +51,19 @@ pub struct FirecrackerBackend {
     rootfs: String,
     exec_timeout_secs: u64,
     vm_locks: VmLockMap,
+    golden_dir: PathBuf,
 }
 
 impl FirecrackerBackend {
     pub fn new(db: db::Db, kernel: String, rootfs: String, exec_timeout_secs: u64) -> Self {
+        let golden_dir = storage::golden_dir();
         Self {
             db: Mutex::new(db),
             kernel,
             rootfs,
             exec_timeout_secs,
             vm_locks: Mutex::new(HashMap::new()),
+            golden_dir,
         }
     }
 
@@ -81,33 +84,14 @@ impl FirecrackerBackend {
         locks.remove(&(user_id.to_string(), name.to_string()));
     }
 
-    fn vm_to_info(rec: &db::VmRecord) -> VmInfo {
-        let alive = rec
-            .pid
-            .is_some_and(|pid| vm::is_process_alive(pid as i32));
-        let state = if alive {
-            rec.state.clone()
-        } else {
-            "dead".to_string()
-        };
-        VmInfo {
-            name: rec.name.clone(),
-            state,
-            cpus: rec.cpus,
-            mem_mib: rec.mem_mib,
-            created_at: rec.created_at.clone(),
-        }
-    }
-}
-
-impl VmBackend for FirecrackerBackend {
-    fn create(&self, user_id: &str, name: &str, cpus: u32, mem_mib: u32) -> Result<VmInfo> {
-        storage::validate_name(name, "VM")?;
-
-        if self.db().get_vm(user_id, name)?.is_some() {
-            bail!("VM '{name}' already exists");
-        }
-
+    /// Cold-boot create: configure + start a fresh VM from kernel/rootfs.
+    fn create_cold_boot(
+        &self,
+        user_id: &str,
+        name: &str,
+        cpus: u32,
+        mem_mib: u32,
+    ) -> Result<VmInfo> {
         if !std::path::Path::new(&self.kernel).exists() {
             bail!("kernel not found: {}", self.kernel);
         }
@@ -115,7 +99,6 @@ impl VmBackend for FirecrackerBackend {
             bail!("rootfs not found: {}", self.rootfs);
         }
 
-        // Allocate network index and set up TAP via noid-netd
         let net_config = match (|| -> Result<_> {
             let used = self.db().list_used_net_indices()?;
             let index = network::allocate_index(&used)?;
@@ -167,23 +150,99 @@ impl VmBackend for FirecrackerBackend {
             return Err(e);
         }
 
+        self.insert_vm_record(user_id, name, pid, sock, cpus, mem_mib, net_config.as_ref())
+    }
+
+    /// Fast create: restore from golden snapshot, reconfigure network.
+    fn create_from_golden(
+        &self,
+        user_id: &str,
+        name: &str,
+        cpus: u32,
+        mem_mib: u32,
+    ) -> Result<VmInfo> {
+        // Clone golden snapshot files into VM dir
+        let subvol = storage::clone_golden(user_id, name)?;
+
+        // Allocate network
+        let net_config = match (|| -> Result<_> {
+            let used = self.db().list_used_net_indices()?;
+            let index = network::allocate_index(&used)?;
+            network::setup_vm_network(index)
+        })() {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                eprintln!("warning: VM networking unavailable: {e:#}");
+                None
+            }
+        };
+
+        // Spawn FC process (creates new FIFO + serial.log)
+        let (pid, sock) = match vm::spawn_fc(&subvol) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(ref nc) = net_config {
+                    let _ = network::teardown_vm_network(&nc.tap_name);
+                }
+                let _ = storage::delete_subvolume(user_id, name);
+                return Err(e);
+            }
+        };
+
+        // Load golden snapshot → VM resumes immediately
+        if let Err(e) = vm::load_fc_snapshot(&sock, &subvol) {
+            vm::kill_vm_process(pid as i64);
+            if let Some(ref nc) = net_config {
+                let _ = network::teardown_vm_network(&nc.tap_name);
+            }
+            let _ = storage::delete_subvolume(user_id, name);
+            return Err(e);
+        }
+
+        // Reconfigure guest network (snapshot has old template IP)
+        if let Some(ref nc) = net_config {
+            if let Err(e) = self.reconfigure_guest_network(&subvol, nc) {
+                eprintln!("warning: failed to reconfigure guest network: {e:#}");
+            }
+        }
+
+        self.insert_vm_record(user_id, name, pid, sock, cpus, mem_mib, net_config.as_ref())
+    }
+
+    /// Insert VM record into DB and return VmInfo. Rolls back on failure.
+    #[allow(clippy::too_many_arguments)]
+    fn insert_vm_record(
+        &self,
+        user_id: &str,
+        name: &str,
+        pid: u32,
+        socket_path: String,
+        cpus: u32,
+        mem_mib: u32,
+        net_config: Option<&network::NetworkConfig>,
+    ) -> Result<VmInfo> {
+        let rootfs_path = storage::vm_dir(user_id, name)
+            .join("rootfs.ext4")
+            .to_string_lossy()
+            .to_string();
+
         if let Err(e) = self.db().insert_vm(
             user_id,
             name,
             db::VmInsertData {
                 pid,
-                socket_path: sock,
+                socket_path,
                 kernel: self.kernel.clone(),
-                rootfs: vm_rootfs.to_string_lossy().to_string(),
+                rootfs: rootfs_path,
                 cpus,
                 mem_mib,
-                net_index: net_config.as_ref().map(|c| c.index),
-                tap_name: net_config.as_ref().map(|c| c.tap_name.clone()),
-                guest_ip: net_config.as_ref().map(|c| c.guest_ip.clone()),
+                net_index: net_config.map(|c| c.index),
+                tap_name: net_config.map(|c| c.tap_name.clone()),
+                guest_ip: net_config.map(|c| c.guest_ip.clone()),
             },
         ) {
             vm::kill_vm_process(pid as i64);
-            if let Some(ref nc) = net_config {
+            if let Some(nc) = net_config {
                 let _ = network::teardown_vm_network(&nc.tap_name);
             }
             let _ = storage::delete_subvolume(user_id, name);
@@ -197,6 +256,79 @@ impl VmBackend for FirecrackerBackend {
             mem_mib,
             created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         })
+    }
+
+    /// After restoring from snapshot, reconfigure the guest's network interface.
+    /// The snapshot has the template's old IP; we flush and assign the new one.
+    /// Uses exec_via_serial for proper marker-based synchronization.
+    fn reconfigure_guest_network(
+        &self,
+        vm_dir: &std::path::Path,
+        net_config: &network::NetworkConfig,
+    ) -> Result<()> {
+        let cmd = vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            format!(
+                "sudo ip addr flush dev eth0 && \
+                 sudo ip addr add {}/30 dev eth0 && \
+                 sudo ip link set eth0 up && \
+                 sudo ip route add default via {}",
+                net_config.guest_ip, net_config.host_ip
+            ),
+        ];
+        let (_, exit_code, timed_out, _) = exec::exec_via_serial(vm_dir, &cmd, self.exec_timeout_secs)?;
+        if timed_out {
+            bail!("network reconfiguration timed out");
+        }
+        if exit_code != Some(0) {
+            bail!(
+                "network reconfiguration failed (exit code: {:?})",
+                exit_code
+            );
+        }
+        Ok(())
+    }
+
+    fn vm_to_info(rec: &db::VmRecord) -> VmInfo {
+        let alive = rec
+            .pid
+            .is_some_and(|pid| vm::is_process_alive(pid as i32));
+        let state = if alive {
+            rec.state.clone()
+        } else {
+            "dead".to_string()
+        };
+        VmInfo {
+            name: rec.name.clone(),
+            state,
+            cpus: rec.cpus,
+            mem_mib: rec.mem_mib,
+            created_at: rec.created_at.clone(),
+        }
+    }
+}
+
+impl VmBackend for FirecrackerBackend {
+    fn create(&self, user_id: &str, name: &str, cpus: u32, mem_mib: u32) -> Result<VmInfo> {
+        storage::validate_name(name, "VM")?;
+
+        if self.db().get_vm(user_id, name)?.is_some() {
+            bail!("VM '{name}' already exists");
+        }
+
+        // Check if we can use the golden snapshot (fast path)
+        let use_golden = self.golden_dir.join("memory.snap").exists()
+            && match storage::golden_config() {
+                Ok((gc, gm)) => gc == cpus && gm == mem_mib,
+                Err(_) => false,
+            };
+
+        if use_golden {
+            self.create_from_golden(user_id, name, cpus, mem_mib)
+        } else {
+            self.create_cold_boot(user_id, name, cpus, mem_mib)
+        }
     }
 
     fn destroy(&self, user_id: &str, name: &str) -> Result<()> {
@@ -458,9 +590,9 @@ pub fn console_write(handle: &ConsoleHandle, data: &[u8]) -> Result<()> {
 /// user sees recent output (like the login prompt) immediately on attach.
 pub fn console_open_log(handle: &ConsoleHandle) -> Result<std::fs::File> {
     let mut f = std::fs::File::open(&handle.serial_log)?;
-    // Seek back up to 4KB from the end to show recent context
+    // Seek back up to 512 bytes from the end to show recent context
     let len = f.seek(std::io::SeekFrom::End(0))?;
-    let rewind = std::cmp::min(len, 4096);
+    let rewind = std::cmp::min(len, 512);
     f.seek(std::io::SeekFrom::End(-(rewind as i64)))?;
     Ok(f)
 }

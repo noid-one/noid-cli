@@ -222,6 +222,73 @@ pub fn clone_snapshot(
     Ok(dest)
 }
 
+/// Path to the golden snapshot directory.
+pub fn golden_dir() -> PathBuf {
+    config::noid_dir().join("golden")
+}
+
+/// Check if a golden snapshot exists (has memory.snap).
+pub fn golden_snapshot_exists() -> bool {
+    golden_dir().join("memory.snap").exists()
+}
+
+/// Read the golden snapshot's template config (cpus, mem_mib).
+pub fn golden_config() -> Result<(u32, u32)> {
+    let config_path = golden_dir().join("config.json");
+    let data = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read golden config: {}", config_path.display()))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&data).context("failed to parse golden config.json")?;
+    let cpus = v["cpus"].as_u64().context("missing cpus in golden config")? as u32;
+    let mem_mib = v["mem_mib"].as_u64().context("missing mem_mib in golden config")? as u32;
+    Ok((cpus, mem_mib))
+}
+
+/// Clone golden snapshot files into a new VM directory.
+/// Creates the VM dir, copies rootfs.ext4 (reflink), memory.snap, and vmstate.snap.
+pub fn clone_golden(user_id: &str, vm_name: &str) -> Result<PathBuf> {
+    validate_name(vm_name, "VM")?;
+    ensure_storage()?;
+
+    let golden = golden_dir();
+
+    // Validate all required files exist and are non-empty
+    for file in &["rootfs.ext4", "memory.snap", "vmstate.snap"] {
+        let path = golden.join(file);
+        if !path.exists() {
+            bail!("golden snapshot incomplete: missing {}", path.display());
+        }
+        if path.metadata()?.len() == 0 {
+            bail!("golden snapshot file is empty: {}", path.display());
+        }
+    }
+
+    let dest = vm_dir(user_id, vm_name);
+    if dest.exists() {
+        bail!("storage already exists for VM '{vm_name}'");
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir_all(&dest)?;
+    // Copy rootfs with reflink for speed
+    run_cmd(
+        "cp",
+        &[
+            "--reflink=auto",
+            &golden.join("rootfs.ext4").to_string_lossy(),
+            &dest.join("rootfs.ext4").to_string_lossy(),
+        ],
+    )?;
+    // Copy snapshot files
+    std::fs::copy(golden.join("memory.snap"), dest.join("memory.snap"))
+        .context("failed to copy memory.snap")?;
+    std::fs::copy(golden.join("vmstate.snap"), dest.join("vmstate.snap"))
+        .context("failed to copy vmstate.snap")?;
+
+    Ok(dest)
+}
+
 /// Delete VM storage
 pub fn delete_subvolume(user_id: &str, vm_name: &str) -> Result<()> {
     validate_name(vm_name, "VM")?;

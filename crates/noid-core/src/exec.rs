@@ -47,9 +47,10 @@ pub fn exec_via_serial(
         .collect::<Vec<_>>()
         .join(" ");
 
-    // Wrap command: echo start marker, run command, capture exit code, echo exit + end markers
+    // Wrap command: echo start marker, run command, capture exit code, echo exit + end markers.
+    // Prepend a newline to clear partial prompts on the serial tty.
     let wrapped = format!(
-        "echo '{marker_start}'; {escaped_cmd}; echo '{marker_exit}'$?; echo '{marker_end}'\n"
+        "\necho '{marker_start}'; {escaped_cmd}; echo '{marker_exit}'$?; echo '{marker_end}'\n"
     );
     vm::write_to_serial(vm_dir, wrapped.as_bytes())?;
 
@@ -70,43 +71,54 @@ pub fn exec_via_serial(
         let start_offset = start_pos.min(content.len() as u64) as usize;
         let new_output = &content[start_offset..];
 
-        let start_needle = format!("\r\n{marker_start}\r\n");
-        let end_needle = format!("\r\n{marker_end}\r\n");
-
-        if let Some(end_pos) = new_output.find(&end_needle) {
-            if let Some(start_pos) = new_output.find(&start_needle) {
-                let output_start = start_pos + start_needle.len();
-                if output_start <= end_pos {
-                    let raw_output = &new_output[output_start..end_pos];
-
-                    // Extract exit code from the exit marker line
-                    let exit_needle = marker_exit.to_string();
-                    let (output, exit_code) =
-                        if let Some(exit_pos) = raw_output.rfind(&exit_needle) {
-                            let before_exit = &raw_output[..exit_pos];
-                            let after_exit =
-                                &raw_output[exit_pos + exit_needle.len()..];
-                            let code_str = after_exit.trim().trim_end_matches('\r');
-                            let code = code_str.parse::<i32>().ok();
-                            (before_exit.trim().to_string(), code)
-                        } else {
-                            (raw_output.trim().to_string(), None)
-                        };
-
-                    let truncated = output.len() > MAX_OUTPUT_BYTES;
-                    let output = if truncated {
-                        output[..MAX_OUTPUT_BYTES].to_string()
-                    } else {
-                        output
-                    };
-
-                    return Ok((output, exit_code, false, truncated));
-                }
-            }
-            // End marker found but no start marker — return empty
-            return Ok((String::new(), None, false, false));
+        if let Some((raw_output, exit_code)) =
+            parse_marked_output(new_output, &marker_start, &marker_end, &marker_exit)
+        {
+            let truncated = raw_output.len() > MAX_OUTPUT_BYTES;
+            let output = if truncated {
+                raw_output[..MAX_OUTPUT_BYTES].to_string()
+            } else {
+                raw_output
+            };
+            return Ok((output, exit_code, false, truncated));
         }
     }
+}
+
+fn parse_marked_output(
+    serial_chunk: &str,
+    marker_start: &str,
+    marker_end: &str,
+    marker_exit: &str,
+) -> Option<(String, Option<i32>)> {
+    let normalized = serial_chunk.replace("\r\n", "\n").replace('\r', "\n");
+    let mut collecting = false;
+    let mut lines = Vec::new();
+    let mut exit_code = None;
+
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if !collecting {
+            if trimmed == marker_start {
+                collecting = true;
+            }
+            continue;
+        }
+
+        if trimmed == marker_end {
+            let output = lines.join("\n").trim().to_string();
+            return Some((output, exit_code));
+        }
+
+        if let Some(rest) = trimmed.strip_prefix(marker_exit) {
+            exit_code = rest.trim().parse::<i32>().ok();
+            continue;
+        }
+
+        lines.push(line.to_string());
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -159,5 +171,33 @@ mod tests {
             assert!(escaped.starts_with('\''), "should be quoted: {input}");
             assert!(escaped.ends_with('\''), "should be quoted: {input}");
         }
+    }
+
+    #[test]
+    fn parse_marked_output_accepts_lf_line_endings() {
+        let serial = "echo 'cmd'\nNOID_EXEC_1234\nhello\nNOID_EXEC_1234_EXIT0\nNOID_EXEC_1234_END\n";
+        let parsed = parse_marked_output(
+            serial,
+            "NOID_EXEC_1234",
+            "NOID_EXEC_1234_END",
+            "NOID_EXEC_1234_EXIT",
+        )
+        .expect("should parse");
+        assert_eq!(parsed.0, "hello");
+        assert_eq!(parsed.1, Some(0));
+    }
+
+    #[test]
+    fn parse_marked_output_accepts_crlf_line_endings() {
+        let serial = "\r\nNOID_EXEC_abcd\r\nhi\r\nNOID_EXEC_abcd_EXIT7\r\nNOID_EXEC_abcd_END\r\n";
+        let parsed = parse_marked_output(
+            serial,
+            "NOID_EXEC_abcd",
+            "NOID_EXEC_abcd_END",
+            "NOID_EXEC_abcd_EXIT",
+        )
+        .expect("should parse");
+        assert_eq!(parsed.0, "hi");
+        assert_eq!(parsed.1, Some(7));
     }
 }

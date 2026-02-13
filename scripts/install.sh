@@ -9,7 +9,7 @@ KERNEL_VERSION="6.1"
 NOID_DIR="/home/firecracker"
 NOID_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="/usr/local/bin"
-ROOTFS_PATH="${NOID_DIR}/rootfs-ubuntu2404.ext4"
+ROOTFS_PATH="${NOID_DIR}/rootfs.ext4"
 KERNEL_PATH="${NOID_DIR}/vmlinux.bin"
 
 # Colors for output
@@ -50,7 +50,7 @@ step "Checking Rust toolchain"
 CARGO_BIN="/home/firecracker/.cargo/bin"
 export PATH="${CARGO_BIN}:${PATH}"
 if [ -x "${CARGO_BIN}/cargo" ]; then
-    warn "cargo already installed ($("${CARGO_BIN}/cargo" --version))"
+    warn "cargo already installed ($(sudo -u firecracker "${CARGO_BIN}/cargo" --version 2>/dev/null))"
 else
     echo "    Installing Rust via rustup..."
     sudo -u firecracker bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
@@ -104,6 +104,13 @@ cd "$NOID_REPO"
 sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" bash -c "cd ${NOID_REPO} && cargo build --release --workspace" 2>&1 | tail -3
 
 echo "    Installing binaries to ${BIN_DIR}"
+# Stop running daemons so we can overwrite their binaries
+for proc in noid-server noid-netd; do
+    if pkill -x "$proc" 2>/dev/null; then
+        echo "    stopped running ${proc}"
+        sleep 0.2
+    fi
+done
 cp target/release/noid "${BIN_DIR}/noid"
 cp target/release/noid-server "${BIN_DIR}/noid-server"
 cp target/release/noid-netd "${BIN_DIR}/noid-netd"
@@ -155,9 +162,9 @@ else
 fi
 
 if [ "$BUILD_ROOTFS" = "1" ]; then
-    echo "    Building Ubuntu 24.04 LTS rootfs (this takes a few minutes)..."
+    echo "    Building Ubuntu 25.04 rootfs (this takes a few minutes)..."
     MNT="/tmp/noid-rootfs-mnt"
-    SIZE_MB=4096
+    SIZE_MB=2048
 
     dd if=/dev/zero of="$ROOTFS_PATH" bs=1M count="$SIZE_MB" status=none
     mkfs.ext4 -qF "$ROOTFS_PATH"
@@ -175,14 +182,12 @@ if [ "$BUILD_ROOTFS" = "1" ]; then
     }
     trap rootfs_cleanup EXIT
 
-    echo "    debootstrap noble..."
+    echo "    debootstrap plucky..."
     debootstrap --include=\
-systemd,systemd-sysv,dbus,\
-iproute2,iputils-ping,dnsutils,iptables,\
-ca-certificates,curl,wget,\
-openssh-server,sudo,\
-vim,less,git,build-essential \
-noble "$MNT" http://archive.ubuntu.com/ubuntu > /dev/null
+systemd,systemd-sysv,dbus,login,\
+iproute2,iputils-ping,\
+ca-certificates,curl,wget,sudo \
+plucky "$MNT" http://archive.ubuntu.com/ubuntu
 
     mount --bind /dev "$MNT/dev"
     mount --bind /dev/pts "$MNT/dev/pts"
@@ -193,7 +198,8 @@ noble "$MNT" http://archive.ubuntu.com/ubuntu > /dev/null
 #!/bin/bash
 set -euo pipefail
 
-# DNS
+# DNS — remove any symlink (Ubuntu defaults to resolved stub) and write a real file
+rm -f /etc/resolv.conf
 cat > /etc/resolv.conf << 'EOF'
 nameserver 1.1.1.1
 nameserver 8.8.8.8
@@ -207,17 +213,12 @@ passwd -d noid
 echo 'noid ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/noid
 chmod 0440 /etc/sudoers.d/noid
 
-# SSH
-mkdir -p /etc/ssh
-sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
-
 # Serial console
 mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
 cat > /etc/systemd/system/serial-getty@ttyS0.service.d/override.conf << 'EOF'
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty --keep-baud 115200,57600,38400,9600 ttyS0 $TERM
+ExecStart=-/sbin/agetty --autologin noid --keep-baud 115200,57600,38400,9600 ttyS0 $TERM
 EOF
 systemctl enable serial-getty@ttyS0.service
 
@@ -230,14 +231,24 @@ Name=eth0
 DHCP=no
 EOF
 systemctl enable systemd-networkd
-systemctl enable systemd-resolved
+# Keep DNS static via /etc/resolv.conf for minimal images. resolved can fail
+# in stripped environments and is not required for noid exec.
+systemctl disable systemd-resolved 2>/dev/null || true
+systemctl mask systemd-resolved.service 2>/dev/null || true
 
-# Node.js 22 LTS
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
-
-# Claude Code
-npm install -g @anthropic-ai/claude-code
+# Disable unnecessary services for fast boot
+systemctl disable cron.service 2>/dev/null || true
+systemctl disable rsyslog.service 2>/dev/null || true
+systemctl mask getty@tty1.service
+systemctl mask systemd-timesyncd.service
+systemctl mask e2scrub_all.timer
+systemctl mask fstrim.timer
+systemctl mask logrotate.timer
+systemctl mask motd-news.timer
+systemctl mask dpkg-db-backup.timer
+systemctl mask console-setup.service
+systemctl mask systemd-update-utmp.service
+systemctl mask systemd-update-utmp-runlevel.service
 
 # Cleanup
 systemctl disable apt-daily.timer 2>/dev/null || true
@@ -262,19 +273,7 @@ CHROOT_SCRIPT
     echo "    rootfs built: ${ROOTFS_PATH} ($(du -h "$ROOTFS_PATH" | cut -f1))"
 fi
 
-# --- Step 8: Server config ---
-
-step "Writing server.toml"
-SERVER_TOML="${NOID_REPO}/server.toml"
-cat > "$SERVER_TOML" << EOF
-listen = "0.0.0.0:7654"
-kernel = "${KERNEL_PATH}"
-rootfs = "${ROOTFS_PATH}"
-EOF
-chown firecracker:firecracker "$SERVER_TOML"
-echo "    ${SERVER_TOML}"
-
-# --- Step 9: Reset DB (schema changed) ---
+# --- Step 8: Reset DB (schema may have changed) ---
 
 step "Resetting database (schema updated)"
 DB_PATH="${NOID_DIR}/.noid/noid.db"
@@ -284,6 +283,128 @@ if [ -f "$DB_PATH" ]; then
 else
     warn "no existing database"
 fi
+
+# --- Step 9: Golden snapshot ---
+
+step "Creating golden snapshot"
+GOLDEN_DIR="${NOID_DIR}/.noid/golden"
+
+if [ -f "${GOLDEN_DIR}/memory.snap" ]; then
+    warn "golden snapshot already exists at ${GOLDEN_DIR}"
+else
+    echo "    Starting noid-server for template VM..."
+
+    # Write a temp server config
+    GOLDEN_TOML=$(mktemp)
+    cat > "$GOLDEN_TOML" << GCEOF
+listen = "127.0.0.1:7654"
+kernel = "${KERNEL_PATH}"
+rootfs = "${ROOTFS_PATH}"
+exec_timeout_secs = 30
+GCEOF
+    chown firecracker:firecracker "$GOLDEN_TOML"
+
+    # Start server in background
+    sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" \
+        noid-server serve --config "$GOLDEN_TOML" &
+    SERVER_PID=$!
+    sleep 1
+
+    golden_cleanup() {
+        kill "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
+        rm -f "$GOLDEN_TOML"
+    }
+    trap golden_cleanup EXIT
+
+    # Create template user and capture token
+    GOLDEN_TOKEN=$(sudo -u firecracker noid-server add-user _template 2>/dev/null)
+    echo "    Template user created"
+
+    # Configure CLI
+    sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
+        noid auth setup --url http://127.0.0.1:7654 --token "$GOLDEN_TOKEN"
+    echo "    CLI configured"
+
+    # Create template VM
+    echo "    Creating template VM (cold boot)..."
+    sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
+        noid create _golden
+
+    # Wait for VM to be ready (poll with exec)
+    echo "    Waiting for VM to boot..."
+    RETRIES=0
+    MAX_RETRIES=60
+    while [ "$RETRIES" -lt "$MAX_RETRIES" ]; do
+        if sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
+            noid exec --name _golden -- echo ready 2>/dev/null | grep -q ready; then
+            break
+        fi
+        RETRIES=$((RETRIES + 1))
+        sleep 2
+    done
+    if [ "$RETRIES" -ge "$MAX_RETRIES" ]; then
+        echo ""
+        echo -e "    ${RED}Template VM failed to boot within timeout${NC}"
+        echo -e "    ${YELLOW}VMs will use slow cold-boot (no golden snapshot)${NC}"
+        echo ""
+        sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
+            noid destroy --name _golden 2>/dev/null || true
+        sudo -u firecracker noid-server remove-user _template 2>/dev/null || true
+        golden_cleanup
+        trap - EXIT
+    else
+        echo "    Template VM ready"
+
+        # Take checkpoint
+        echo "    Taking golden snapshot..."
+        sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
+            noid checkpoint --name _golden --label golden
+
+        # Find the checkpoint files — they're in the VM's subvolume
+        # The checkpoint command creates memory.snap + vmstate.snap in the VM dir
+        # We need to copy them to the golden dir
+        mkdir -p "$GOLDEN_DIR"
+        chown firecracker:firecracker "$GOLDEN_DIR"
+
+        # Locate the template VM directory without requiring sqlite3 on host.
+        VM_DIR=$(find "${NOID_DIR}/.noid/storage/users" -mindepth 3 -maxdepth 3 -type d -path "*/vms/_golden" | head -1)
+        if [ -z "${VM_DIR}" ] || [ ! -d "${VM_DIR}" ]; then
+            fail "could not locate template VM directory for _golden"
+        fi
+
+        cp --reflink=auto "${VM_DIR}/rootfs.ext4" "${GOLDEN_DIR}/rootfs.ext4"
+        cp "${VM_DIR}/memory.snap" "${GOLDEN_DIR}/memory.snap"
+        cp "${VM_DIR}/vmstate.snap" "${GOLDEN_DIR}/vmstate.snap"
+
+        # Write template config for compatibility checking
+        cat > "${GOLDEN_DIR}/config.json" << CONFEOF
+{"cpus": 1, "mem_mib": 128}
+CONFEOF
+        chown -R firecracker:firecracker "$GOLDEN_DIR"
+        echo "    Golden snapshot saved to ${GOLDEN_DIR}"
+
+        # Cleanup: destroy template VM and user
+        sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
+            noid destroy --name _golden 2>/dev/null || true
+        sudo -u firecracker noid-server remove-user _template 2>/dev/null || true
+
+        golden_cleanup
+        trap - EXIT
+    fi
+fi
+
+# --- Step 10: Server config ---
+
+step "Writing server.toml (for production use)"
+SERVER_TOML="${NOID_REPO}/server.toml"
+cat > "$SERVER_TOML" << EOF
+listen = "0.0.0.0:7654"
+kernel = "${KERNEL_PATH}"
+rootfs = "${ROOTFS_PATH}"
+EOF
+chown firecracker:firecracker "$SERVER_TOML"
+echo "    ${SERVER_TOML}"
 
 # --- Done ---
 
@@ -303,4 +424,4 @@ echo "  1. Start the server:  noid-server serve --config server.toml"
 echo "  2. Add a user:        noid-server add-user alice"
 echo "  3. Configure client:  noid auth setup --url http://localhost:7654 --token <token>"
 echo "  4. Create a VM:       noid create myvm"
-echo "  5. Test networking:   noid exec --name myvm -- ping -c3 1.1.1.1"
+echo "  5. Optional: Install Claude Code in a VM, then checkpoint to update the golden snapshot"
