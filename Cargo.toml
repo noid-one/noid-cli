@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "noid-local"
-version = "0.2.10"
+version = "0.2.11"
 edition = "2021"
 
 [[bin]]
