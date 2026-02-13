@@ -297,6 +297,18 @@ pub fn configure_and_start_vm(
         .context("failed to set network interface")?;
     }
 
+    // Entropy device provides virtio-rng backed by host /dev/urandom.
+    // Without this, getrandom() blocks after snapshot restore (stale entropy pool),
+    // causing TLS handshakes to hang indefinitely.
+    fc_put(
+        socket_path,
+        "/entropy",
+        &serde_json::json!({
+            "rate_limiter": null
+        }),
+    )
+    .context("failed to set entropy device")?;
+
     fc_put(
         socket_path,
         "/actions",
