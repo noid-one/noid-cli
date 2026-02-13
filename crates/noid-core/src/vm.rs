@@ -166,7 +166,7 @@ pub fn create_fc_snapshot(socket_path: &str, snap_dir: &Path) -> Result<()> {
 /// Load a Firecracker snapshot without resuming, patch resources to point at
 /// the new VM's rootfs and TAP device, then resume.
 ///
-/// Firecracker requires: load snapshot first, THEN patch resources, THEN resume.
+/// Firecracker requires: load snapshot first, THEN PUT/patch resources, THEN resume.
 /// Configuring boot resources before snapshot load is rejected with HTTP 400.
 pub fn load_and_restore_snapshot(
     socket_path: &str,
@@ -204,17 +204,18 @@ pub fn load_and_restore_snapshot(
     )
     .context("failed to patch root drive after restore")?;
 
-    // 3. PATCH network interface to bind to new TAP device
+    // 3. PUT network interface to bind to new TAP device
     if let Some(net_config) = net {
-        fc_patch(
+        fc_put(
             socket_path,
             "/network-interfaces/eth0",
             &serde_json::json!({
                 "iface_id": "eth0",
+                "guest_mac": net_config.guest_mac,
                 "host_dev_name": net_config.tap_name
             }),
         )
-        .context("failed to patch network interface after restore")?;
+        .context("failed to update network interface after restore")?;
     }
 
     // 4. Resume VM
