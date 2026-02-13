@@ -189,8 +189,14 @@ impl FirecrackerBackend {
             }
         };
 
-        // Load golden snapshot → VM resumes immediately
-        if let Err(e) = vm::load_fc_snapshot(&sock, &subvol) {
+        // Load snapshot, patch drive/network to point at new resources, resume
+        let rootfs_path = subvol.join("rootfs.ext4");
+        if let Err(e) = vm::load_and_restore_snapshot(
+            &sock,
+            &subvol,
+            &rootfs_path.to_string_lossy(),
+            net_config.as_ref(),
+        ) {
             vm::kill_vm_process(pid as i64);
             if let Some(ref nc) = net_config {
                 let _ = network::teardown_vm_network(&nc.tap_name);
@@ -507,7 +513,14 @@ impl VmBackend for FirecrackerBackend {
             }
         };
 
-        if let Err(e) = vm::load_fc_snapshot(&socket_path, &subvol) {
+        // Load snapshot, patch drive/network to point at new resources, resume
+        let rootfs_path_for_restore = subvol.join("rootfs.ext4");
+        if let Err(e) = vm::load_and_restore_snapshot(
+            &socket_path,
+            &subvol,
+            &rootfs_path_for_restore.to_string_lossy(),
+            net_config.as_ref(),
+        ) {
             vm::kill_vm_process(pid as i64);
             if let Some(ref nc) = net_config {
                 let _ = network::teardown_vm_network(&nc.tap_name);

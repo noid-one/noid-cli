@@ -164,6 +164,66 @@ pub fn create_fc_snapshot(socket_path: &str, snap_dir: &Path) -> Result<()> {
     .context("failed to create FC snapshot")
 }
 
+/// Load a Firecracker snapshot without resuming, patch resources to point at
+/// the new VM's rootfs and TAP device, then resume.
+///
+/// Firecracker requires: load snapshot first, THEN patch resources, THEN resume.
+/// Configuring boot resources before snapshot load is rejected with HTTP 400.
+pub fn load_and_restore_snapshot(
+    socket_path: &str,
+    snap_dir: &Path,
+    rootfs_path: &str,
+    net: Option<&crate::network::NetworkConfig>,
+) -> Result<()> {
+    let mem_path = snap_dir.join("memory.snap");
+    let state_path = snap_dir.join("vmstate.snap");
+
+    // 1. Load snapshot WITHOUT resuming
+    fc_put(
+        socket_path,
+        "/snapshot/load",
+        &serde_json::json!({
+            "snapshot_path": state_path.to_string_lossy(),
+            "mem_backend": {
+                "backend_path": mem_path.to_string_lossy(),
+                "backend_type": "File"
+            },
+            "enable_diff_snapshots": false,
+            "resume_vm": false
+        }),
+    )
+    .context("failed to load FC snapshot")?;
+
+    // 2. PATCH drive to point at new rootfs copy
+    fc_patch(
+        socket_path,
+        "/drives/rootfs",
+        &serde_json::json!({
+            "drive_id": "rootfs",
+            "path_on_host": rootfs_path
+        }),
+    )
+    .context("failed to patch root drive after restore")?;
+
+    // 3. PATCH network interface to bind to new TAP device
+    if let Some(net_config) = net {
+        fc_patch(
+            socket_path,
+            "/network-interfaces/eth0",
+            &serde_json::json!({
+                "iface_id": "eth0",
+                "host_dev_name": net_config.tap_name
+            }),
+        )
+        .context("failed to patch network interface after restore")?;
+    }
+
+    // 4. Resume VM
+    resume_vm(socket_path)?;
+
+    Ok(())
+}
+
 pub fn load_fc_snapshot(socket_path: &str, snap_dir: &Path) -> Result<()> {
     let mem_path = snap_dir.join("memory.snap");
     let state_path = snap_dir.join("vmstate.snap");
