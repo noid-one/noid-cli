@@ -1,6 +1,6 @@
 #!/bin/bash
-# install.sh — Complete noid installation: dependencies, Firecracker, binaries, networking, rootfs.
-# Usage: sudo bash scripts/install.sh
+# install-server.sh — Complete noid server provisioning: dependencies, Firecracker, binaries, networking, rootfs.
+# Usage: sudo bash scripts/install-server.sh
 set -euo pipefail
 
 FC_VERSION="1.14.1"
@@ -9,6 +9,7 @@ KERNEL_VERSION="6.1"
 NOID_DIR="/home/firecracker"
 NOID_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="/usr/local/bin"
+USER_BIN_DIR="${NOID_DIR}/.local/bin"
 ROOTFS_PATH="${NOID_DIR}/rootfs.ext4"
 KERNEL_PATH="${NOID_DIR}/vmlinux.bin"
 
@@ -25,7 +26,7 @@ fail() { echo -e "${RED}ERROR:${NC} $1"; exit 1; }
 # --- Pre-checks ---
 
 if [ "$(id -u)" -ne 0 ]; then
-    fail "must run as root: sudo bash scripts/install.sh"
+    fail "must run as root: sudo bash scripts/install-server.sh"
 fi
 
 if [ "$(uname -m)" != "x86_64" ]; then
@@ -48,7 +49,7 @@ echo "    done"
 
 step "Checking Rust toolchain"
 CARGO_BIN="/home/firecracker/.cargo/bin"
-export PATH="${CARGO_BIN}:${PATH}"
+export PATH="${USER_BIN_DIR}:${CARGO_BIN}:${PATH}"
 if [ -x "${CARGO_BIN}/cargo" ]; then
     warn "cargo already installed ($(sudo -u firecracker "${CARGO_BIN}/cargo" --version 2>/dev/null))"
 else
@@ -103,7 +104,7 @@ step "Building noid workspace"
 cd "$NOID_REPO"
 sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" bash -c "cd ${NOID_REPO} && cargo build --release --workspace" 2>&1 | tail -3
 
-echo "    Installing binaries to ${BIN_DIR}"
+echo "    Installing binaries"
 # Stop running daemons so we can overwrite their binaries
 for proc in noid-server noid-netd; do
     if pkill -x "$proc" 2>/dev/null; then
@@ -111,10 +112,13 @@ for proc in noid-server noid-netd; do
         sleep 0.2
     fi
 done
-cp target/release/noid "${BIN_DIR}/noid"
-cp target/release/noid-server "${BIN_DIR}/noid-server"
+mkdir -p "$USER_BIN_DIR"
+chown firecracker:firecracker "$USER_BIN_DIR"
+cp target/release/noid "${USER_BIN_DIR}/noid"
+cp target/release/noid-server "${USER_BIN_DIR}/noid-server"
 cp target/release/noid-netd "${BIN_DIR}/noid-netd"
-chmod +x "${BIN_DIR}/noid" "${BIN_DIR}/noid-server" "${BIN_DIR}/noid-netd"
+chmod +x "${USER_BIN_DIR}/noid" "${USER_BIN_DIR}/noid-server" "${BIN_DIR}/noid-netd"
+chown firecracker:firecracker "${USER_BIN_DIR}/noid" "${USER_BIN_DIR}/noid-server"
 
 # --- Step 6: Networking ---
 
@@ -318,7 +322,8 @@ GCEOF
     trap golden_cleanup EXIT
 
     # Create template user and capture token
-    GOLDEN_TOKEN=$(sudo -u firecracker noid-server add-user _template 2>/dev/null)
+    GOLDEN_TOKEN=$(sudo -u firecracker env PATH="${USER_BIN_DIR}:${CARGO_BIN}:${PATH}" \
+        noid-server add-user _template 2>/dev/null)
     echo "    Template user created"
 
     # Configure CLI
@@ -350,7 +355,8 @@ GCEOF
         echo ""
         sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
             noid destroy --name _golden 2>/dev/null || true
-        sudo -u firecracker noid-server remove-user _template 2>/dev/null || true
+        sudo -u firecracker env PATH="${USER_BIN_DIR}:${CARGO_BIN}:${PATH}" \
+            noid-server remove-user _template 2>/dev/null || true
         golden_cleanup
         trap - EXIT
     else
@@ -387,7 +393,8 @@ CONFEOF
         # Cleanup: destroy template VM and user
         sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
             noid destroy --name _golden 2>/dev/null || true
-        sudo -u firecracker noid-server remove-user _template 2>/dev/null || true
+        sudo -u firecracker env PATH="${USER_BIN_DIR}:${CARGO_BIN}:${PATH}" \
+            noid-server remove-user _template 2>/dev/null || true
 
         golden_cleanup
         trap - EXIT
@@ -411,7 +418,8 @@ echo "    ${SERVER_TOML}"
 echo ""
 echo -e "${GREEN}=== noid installed ===${NC}"
 echo ""
-echo "  Binaries:     ${BIN_DIR}/noid, noid-server, noid-netd"
+echo "  User bins:    ${USER_BIN_DIR}/noid, noid-server"
+echo "  System bin:   ${BIN_DIR}/noid-netd"
 echo "  Firecracker:  ${BIN_DIR}/firecracker (v${FC_VERSION})"
 echo "  Kernel:       ${KERNEL_PATH}"
 echo "  Rootfs:       ${ROOTFS_PATH}"

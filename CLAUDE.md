@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Installation
 
 ```bash
-sudo bash scripts/install.sh    # complete setup: deps, Firecracker, networking, rootfs
+sudo bash scripts/install-server.sh    # complete setup: deps, Firecracker, networking, rootfs
 ```
 
 ## Build & Run
@@ -15,7 +15,7 @@ cargo build --workspace          # build all crates
 cargo build --release --workspace  # release builds
 cargo check --workspace          # type-check
 cargo clippy --workspace         # lint
-cargo test --workspace           # run all tests (71 total)
+cargo test --workspace           # run all tests (73 total)
 ```
 
 Four binaries:
@@ -36,8 +36,9 @@ noid/
     noid-server/                 # HTTP/WS server on top of noid-core
     noid-client/                 # CLI client (HTTP + WS)
     noid-netd/                   # privileged network daemon (TAP/IP/iptables)
+  install.sh                       # curl-pipeable client installer (downloads binaries)
   scripts/
-    install.sh                   # complete installer (deps, FC, networking, rootfs)
+    install-server.sh              # server provisioning (deps, FC, networking, rootfs)
     noid-netd.service            # systemd unit for noid-netd
 ```
 
@@ -211,7 +212,7 @@ Three tables:
 
 ## Known Pitfalls
 
-- **DB schema migration** — old noid.db lacks network columns. Delete `~/.noid/noid.db` when upgrading (install.sh does this).
+- **DB schema migration** — old noid.db lacks network columns. Delete `~/.noid/noid.db` when upgrading (install-server.sh does this).
 - **noid-netd must be running** — without it, VMs have no network. Check: `systemctl status noid-netd`
 - **FIFO EOF** — sentinel writer fd must be inherited by FC child.
 - **Serial line endings** — `\r\n` not `\n`. Exec markers use `\r\n` delimiters.
@@ -222,4 +223,4 @@ Three tables:
 ## Test Images
 
 - Kernel: `~/vmlinux.bin`
-- Rootfs: `~/rootfs.ext4` (Ubuntu 25.04, built by install.sh)
+- Rootfs: `~/rootfs.ext4` (Ubuntu 25.04, built by install-server.sh)

@@ -31,17 +31,20 @@ sudo cp target/release/noid $HOME/.local/bin/
 
 ## Step 2: Get a kernel and rootfs
 
-Download the Firecracker quickstart images:
+The easiest way is to run the install script, which downloads the kernel and builds an Ubuntu 25.04 rootfs automatically:
 
 ```bash
-# Kernel
-curl -fsSL -o ~/vmlinux.bin \
-  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
-
-# Root filesystem (Ubuntu 18.04)
-curl -fsSL -o ~/rootfs.ext4 \
-  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/rootfs/bionic.rootfs.ext4"
+sudo bash scripts/install-server.sh
 ```
+
+To download the kernel manually:
+
+```bash
+curl -fsSL -o ~/vmlinux.bin \
+  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux-6.1.bin"
+```
+
+The rootfs is built by `install-server.sh` using debootstrap (Ubuntu 25.04 / plucky). See the script for details.
 
 ## Step 3: Create a server config
 

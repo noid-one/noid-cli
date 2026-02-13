@@ -8,7 +8,11 @@ noid runs as a **client-server** system: `noid-server` manages Firecracker VMs o
 
 ## Install
 
-Download the latest release:
+```bash
+curl -fsSL https://raw.githubusercontent.com/noid-one/noid-cli/master/install.sh | bash
+```
+
+This installs both `noid` and `noid-server` to `~/.local/bin/`. Or download manually:
 
 ```bash
 mkdir -p ~/.local/bin
@@ -45,12 +49,17 @@ The server needs a Linux host with KVM support (`/dev/kvm`), Firecracker install
 
 ### 1. Get a kernel and rootfs
 
+The install script handles everything (kernel download, rootfs build, networking, Firecracker):
+
+```bash
+sudo bash scripts/install-server.sh
+```
+
+Or download the kernel manually and provide your own rootfs:
+
 ```bash
 curl -fsSL -o ~/vmlinux.bin \
-  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
-
-curl -fsSL -o ~/rootfs.ext4 \
-  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/rootfs/bionic.rootfs.ext4"
+  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux-6.1.bin"
 ```
 
 ### 2. Configure and start the server
@@ -191,7 +200,9 @@ noid destroy my-vm
 
 ```
 noid (client)  ──HTTP/WS──>  noid-server  ──unix socket──>  firecracker
-   any machine                 VM host                       microVM
+   any machine                 VM host       │                microVM
+                                             │
+                               noid-netd  <──┘  (TAP/IP/NAT, runs as root)
 ```
 
 - REST API for lifecycle operations (create, destroy, list, checkpoint, restore)
@@ -208,6 +219,7 @@ noid (client)  ──HTTP/WS──>  noid-server  ──unix socket──>  fire
 | `noid-server` | Server binary (`noid-server`) |
 | `noid-core` | VM engine: DB, storage, exec, auth |
 | `noid-types` | Shared wire types (serde structs) |
+| `noid-netd` | Privileged network daemon (TAP/IP/NAT) |
 | `noid-local` | Legacy standalone CLI (pre-client-server) |
 
 See [docs/server-guide.md](docs/server-guide.md) and [docs/client-guide.md](docs/client-guide.md) for detailed guides.
