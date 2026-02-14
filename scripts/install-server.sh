@@ -293,6 +293,13 @@ EOF
 
 echo "noid" > /etc/hostname
 
+# Map hostname to loopback so sudo (and other tools) can resolve it
+cat > /etc/hosts << 'EOF'
+127.0.0.1 localhost
+127.0.1.1 noid
+::1 localhost ip6-localhost ip6-loopback
+EOF
+
 # noid user
 useradd -m -s /bin/bash -G sudo noid
 passwd -d noid
