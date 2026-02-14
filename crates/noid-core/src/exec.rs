@@ -5,6 +5,9 @@ use crate::vm;
 
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1MB
 
+/// Prefix for all exec marker tokens written to the serial console.
+pub const EXEC_MARKER_PREFIX: &str = "NOID_EXEC_";
+
 /// Escape a string for safe use in a shell command.
 /// Uses single quotes and escapes any single quotes in the string.
 pub fn shell_escape(s: &str) -> String {
@@ -89,7 +92,7 @@ pub fn exec_via_serial(
 /// Strip ANSI escape sequences (CSI, OSC, etc.) that shells and terminals
 /// inject into serial output. Without this, escape-prefixed marker lines
 /// (e.g. `\x1b[?2004hNOID_EXEC_...`) fail exact-match detection.
-fn strip_ansi(s: &str) -> String {
+pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
