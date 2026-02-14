@@ -18,15 +18,18 @@ cd noid/
 cargo build --release --workspace
 ```
 
-This produces two binaries:
-- `target/release/noid-server` -- the server
+This produces three server-side binaries:
+- `target/release/noid-server` -- the HTTP/WS server
+- `target/release/noid-netd` -- the privileged network daemon
 - `target/release/noid` -- the CLI client
 
 Install them:
 
 ```bash
-sudo cp target/release/noid-server $HOME/.local/bin/
-sudo cp target/release/noid $HOME/.local/bin/
+mkdir -p $HOME/.local/bin
+cp target/release/noid-server $HOME/.local/bin/
+cp target/release/noid-netd $HOME/.local/bin/
+cp target/release/noid $HOME/.local/bin/
 ```
 
 ## Step 2: Get a kernel and rootfs
@@ -79,7 +82,77 @@ rootfs = "/path/to/rootfs.ext4"
 | `exec_timeout_secs` | No | `30` | Max seconds a `noid exec` command can run |
 | `console_timeout_secs` | No | `3600` | Max seconds an idle console session stays open |
 
-## Step 4: Start the server
+## Step 4: Set up networking
+
+VMs need NAT to reach the internet. This requires two things:
+
+1. **IP forwarding** enabled on the host
+2. **iptables rules** for MASQUERADE and FORWARD
+
+### IP forwarding
+
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/99-noid.conf
+```
+
+### iptables rules (handled by noid-netd)
+
+You do **not** need to set up iptables rules manually or install `iptables-persistent`. The `noid-netd` daemon applies them automatically on startup:
+
+- **MASQUERADE** for 172.16.0.0/16 via the default network interface
+- **FORWARD** rules allowing VM traffic out and return traffic back
+
+Rules are applied idempotently (checked before adding), so they coexist safely with `install-server.sh` or manual setup.
+
+### noid-netd (network daemon)
+
+`noid-netd` is a privileged daemon that manages TAP devices and iptables rules. It runs as root and communicates with the unprivileged `noid-server` via a Unix socket at `/run/noid/netd.sock`.
+
+On startup, noid-netd:
+1. Cleans up orphaned TAP devices from previous runs
+2. Ensures iptables NAT/FORWARD rules are in place (auto-detects default interface)
+3. Listens for TAP setup/teardown requests from noid-server
+
+Install the systemd service:
+
+```bash
+# Install with path substitution for your home directory
+sed "s|/home/firecracker/.local/bin|$HOME/.local/bin|g" scripts/noid-netd.service | \
+  sudo tee /etc/systemd/system/noid-netd.service > /dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now noid-netd
+```
+
+Verify it's running:
+
+```bash
+sudo systemctl status noid-netd
+sudo journalctl -u noid-netd --no-pager -n 10
+```
+
+You should see: `iptables: NAT 172.16.0.0/16 via <interface>`
+
+### Verify networking
+
+```bash
+# Check iptables rules
+sudo iptables -t nat -L POSTROUTING -v -n   # MASQUERADE for 172.16.0.0/16
+sudo iptables -L FORWARD -v -n              # ACCEPT for noid+ interfaces
+
+# Check IP forwarding
+sysctl net.ipv4.ip_forward                  # should be 1
+```
+
+### What survives reboot
+
+| Component | Persistent? | How |
+|---|---|---|
+| IP forwarding | Yes | `/etc/sysctl.d/99-noid.conf` |
+| iptables rules | Yes | noid-netd re-applies on startup |
+| TAP devices | No | Created per-VM on demand |
+
+## Step 5: Start the server
 
 ```bash
 noid-server serve --config server.toml
@@ -102,7 +175,7 @@ To run in the background:
 noid-server serve --config server.toml &
 ```
 
-## Step 5: Add users
+## Step 6: Add users
 
 Each user gets a unique API token. Create a user with `add-user`:
 
@@ -124,7 +197,7 @@ Tokens are:
 - SHA-256 hashed at rest in the database
 - Verified with constant-time comparison (no timing attacks)
 
-## Step 6: Manage users
+## Step 7: Manage users
 
 ### List all users
 
@@ -319,6 +392,51 @@ rm ~/.noid/noid.db
 noid-server add-user alice   # re-add users
 ```
 
+### VMs have no internet access
+
+Check networking in this order:
+
+1. **noid-netd running?** `sudo systemctl status noid-netd`
+2. **iptables rules applied?** `sudo iptables -t nat -L POSTROUTING -v -n` should show MASQUERADE for 172.16.0.0/16
+3. **IP forwarding enabled?** `sysctl net.ipv4.ip_forward` should be 1
+4. **Default interface detected?** `sudo journalctl -u noid-netd --no-pager -n 10` should show `iptables: NAT 172.16.0.0/16 via <interface>`
+
+If noid-netd failed to detect the default interface, the network may not have been ready when the service started. Restart it: `sudo systemctl restart noid-netd`
+
+### HTTPS/TLS hangs inside VMs
+
+The guest needs entropy for TLS. Firecracker VMs include a `virtio-rng` device that provides `/dev/urandom` from the host. If HTTPS hangs, verify the VM config includes the rng device (this is set automatically by noid-server).
+
 ### Database locked errors
 
 The server uses `Mutex<Db>` internally. If you see locking errors, ensure only one `noid-server` instance is running against the same `~/.noid/` directory.
+
+## Updating after code changes
+
+When you rebuild noid from source, deploy the new binaries:
+
+```bash
+cd ~/noid
+cargo build --release --workspace
+cargo test --workspace
+
+# Stop services (binaries are locked while running)
+sudo systemctl stop noid-server
+sudo systemctl stop noid-netd
+
+# Copy new binaries
+cp target/release/noid-server $HOME/.local/bin/
+cp target/release/noid-netd $HOME/.local/bin/
+cp target/release/noid $HOME/.local/bin/
+
+# Update systemd units if changed
+sed "s|/home/firecracker/.local/bin|$HOME/.local/bin|g" scripts/noid-netd.service | \
+  sudo tee /etc/systemd/system/noid-netd.service > /dev/null
+sudo systemctl daemon-reload
+
+# Restart services
+sudo systemctl start noid-netd
+sudo systemctl start noid-server
+```
+
+Start noid-netd before noid-server -- the server needs noid-netd for VM networking.

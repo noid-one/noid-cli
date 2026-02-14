@@ -154,6 +154,132 @@ fn cleanup_orphaned_taps() {
     }
 }
 
+fn ensure_iptables() -> Result<()> {
+    use std::process::Command;
+
+    // Detect default interface by looking for "dev <name>" in route output
+    let output = Command::new("ip")
+        .args(["route", "show", "default"])
+        .output()
+        .context("failed to run 'ip route'")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let default_if = stdout
+        .split_whitespace()
+        .skip_while(|&s| s != "dev")
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("cannot detect default network interface"))?
+        .to_string();
+
+    // Validate interface name (defense-in-depth before passing to iptables)
+    if default_if.is_empty()
+        || default_if.len() > 15
+        || !default_if
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        anyhow::bail!("invalid interface name: {default_if}");
+    }
+
+    // Helper: check if rule exists (-C), add if missing (-A)
+    let ensure = |args_check: &[&str], args_add: &[&str]| -> Result<()> {
+        let status = Command::new("iptables").args(args_check).status()?;
+        if !status.success() {
+            let status = Command::new("iptables").args(args_add).status()?;
+            if !status.success() {
+                anyhow::bail!("iptables add failed: {:?}", args_add);
+            }
+        }
+        Ok(())
+    };
+
+    // MASQUERADE for VM subnet
+    ensure(
+        &[
+            "-t",
+            "nat",
+            "-C",
+            "POSTROUTING",
+            "-s",
+            "172.16.0.0/16",
+            "-o",
+            &default_if,
+            "-j",
+            "MASQUERADE",
+        ],
+        &[
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-s",
+            "172.16.0.0/16",
+            "-o",
+            &default_if,
+            "-j",
+            "MASQUERADE",
+        ],
+    )?;
+
+    // FORWARD: VM → external
+    ensure(
+        &[
+            "-C",
+            "FORWARD",
+            "-i",
+            "noid+",
+            "-o",
+            &default_if,
+            "-j",
+            "ACCEPT",
+        ],
+        &[
+            "-A",
+            "FORWARD",
+            "-i",
+            "noid+",
+            "-o",
+            &default_if,
+            "-j",
+            "ACCEPT",
+        ],
+    )?;
+
+    // FORWARD: external → VM (return traffic)
+    ensure(
+        &[
+            "-C",
+            "FORWARD",
+            "-i",
+            &default_if,
+            "-o",
+            "noid+",
+            "-m",
+            "state",
+            "--state",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "ACCEPT",
+        ],
+        &[
+            "-A",
+            "FORWARD",
+            "-i",
+            &default_if,
+            "-o",
+            "noid+",
+            "-m",
+            "state",
+            "--state",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "ACCEPT",
+        ],
+    )?;
+
+    eprintln!("iptables: NAT 172.16.0.0/16 via {default_if}");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     eprintln!("noid-netd starting");
 
@@ -166,6 +292,11 @@ fn main() -> Result<()> {
 
     // Clean up orphaned TAPs from previous runs
     cleanup_orphaned_taps();
+
+    // Ensure iptables NAT/FORWARD rules are in place
+    if let Err(e) = ensure_iptables() {
+        eprintln!("warning: failed to configure iptables: {e:#}");
+    }
 
     // Bind Unix socket
     let listener =
@@ -189,7 +320,14 @@ fn main() -> Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let cloned = match stream.try_clone() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("failed to clone stream: {e}");
+                        continue;
+                    }
+                };
+                let mut reader = BufReader::new(cloned);
                 let mut line = String::new();
                 match reader.read_line(&mut line) {
                     Ok(0) => continue,

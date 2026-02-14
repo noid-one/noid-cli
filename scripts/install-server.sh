@@ -116,9 +116,9 @@ mkdir -p "$USER_BIN_DIR"
 chown firecracker:firecracker "$USER_BIN_DIR"
 cp target/release/noid "${USER_BIN_DIR}/noid"
 cp target/release/noid-server "${USER_BIN_DIR}/noid-server"
-cp target/release/noid-netd "${BIN_DIR}/noid-netd"
-chmod +x "${USER_BIN_DIR}/noid" "${USER_BIN_DIR}/noid-server" "${BIN_DIR}/noid-netd"
-chown firecracker:firecracker "${USER_BIN_DIR}/noid" "${USER_BIN_DIR}/noid-server"
+cp target/release/noid-netd "${USER_BIN_DIR}/noid-netd"
+chmod +x "${USER_BIN_DIR}/noid" "${USER_BIN_DIR}/noid-server" "${USER_BIN_DIR}/noid-netd"
+chown firecracker:firecracker "${USER_BIN_DIR}/noid" "${USER_BIN_DIR}/noid-server" "${USER_BIN_DIR}/noid-netd"
 
 # --- Step 6: Networking ---
 
@@ -148,8 +148,8 @@ if ! iptables -C FORWARD -i "$DEFAULT_IF" -o noid+ -m state --state RELATED,ESTA
 fi
 echo "    NAT: 172.16.0.0/16 via ${DEFAULT_IF}"
 
-# noid-netd systemd service
-cp scripts/noid-netd.service /etc/systemd/system/noid-netd.service
+# noid-netd systemd service (substitute actual binary path)
+sed "s|/home/firecracker/.local/bin|${USER_BIN_DIR}|g" scripts/noid-netd.service > /etc/systemd/system/noid-netd.service
 systemctl daemon-reload
 systemctl enable noid-netd > /dev/null 2>&1
 systemctl restart noid-netd
@@ -421,8 +421,7 @@ echo "    ${SERVER_TOML}"
 echo ""
 echo -e "${GREEN}=== noid installed ===${NC}"
 echo ""
-echo "  User bins:    ${USER_BIN_DIR}/noid, noid-server"
-echo "  System bin:   ${BIN_DIR}/noid-netd"
+echo "  Binaries:     ${USER_BIN_DIR}/noid, noid-server, noid-netd"
 echo "  Firecracker:  ${BIN_DIR}/firecracker (v${FC_VERSION})"
 echo "  Kernel:       ${KERNEL_PATH}"
 echo "  Rootfs:       ${ROOTFS_PATH}"

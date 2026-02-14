@@ -194,8 +194,7 @@ pub fn load_and_restore_snapshot(
             "host_dev_name": net_config.tap_name
         }]);
     }
-    fc_put(socket_path, "/snapshot/load", &load_body)
-        .context("failed to load FC snapshot")?;
+    fc_put(socket_path, "/snapshot/load", &load_body).context("failed to load FC snapshot")?;
 
     // 2. PATCH drive to point at new rootfs copy
     fc_patch(

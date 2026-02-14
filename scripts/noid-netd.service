@@ -1,9 +1,11 @@
 [Unit]
 Description=noid network daemon
+After=network-online.target
+Wants=network-online.target
 Before=noid-server.service
 
 [Service]
-ExecStart=/usr/local/bin/noid-netd
+ExecStart=/home/firecracker/.local/bin/noid-netd
 User=root
 ProtectSystem=strict
 PrivateTmp=yes

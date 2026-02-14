@@ -147,7 +147,7 @@ WS frames use 1-byte channel prefix: `0x01`=stdout, `0x02`=stderr, `0x03`=stdin.
 - `config.rs` — client config (URL, token), .noid active VM file
 
 **noid-netd**:
-- `main.rs` — daemon: Unix socket listener, request dispatch, orphaned TAP cleanup on startup
+- `main.rs` — daemon: Unix socket listener, request dispatch, orphaned TAP cleanup + iptables setup on startup
 - `addressing.rs` — index → IP/MAC/subnet derivation, index allocation (bounded to 16384)
 - `tap.rs` — TAP create/destroy via ioctl TUNSETIFF/TUNSETPERSIST, link_up via SIOCSIFFLAGS
 - `netlink.rs` — IP/netmask assignment via ioctl SIOCSIFADDR/SIOCSIFNETMASK
@@ -213,7 +213,7 @@ Three tables:
 ## Known Pitfalls
 
 - **DB schema migration** — old noid.db lacks network columns. Delete `~/.noid/noid.db` when upgrading (install-server.sh does this).
-- **noid-netd must be running** — without it, VMs have no network. Check: `systemctl status noid-netd`
+- **noid-netd must be running** — without it, VMs have no network. Check: `systemctl status noid-netd`. On startup, noid-netd idempotently ensures iptables MASQUERADE + FORWARD rules exist (no `iptables-persistent` needed).
 - **FIFO EOF** — sentinel writer fd must be inherited by FC child.
 - **Serial line endings** — `\r\n` not `\n`. Exec markers use `\r\n` delimiters.
 - **nix crate features** — `fs` feature needed for mkfifo.

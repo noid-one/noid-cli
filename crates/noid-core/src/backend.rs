@@ -194,17 +194,15 @@ impl FirecrackerBackend {
             }
         }
         .or_else(|| vm::extract_rootfs_path_from_vmstate(&subvol));
-        let rootfs_alias = snapshot_rootfs_hint
-            .as_deref()
-            .and_then(|p| {
-                match vm::ensure_snapshot_rootfs_path(p, &rootfs_path.to_string_lossy()) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("warning: failed to create snapshot rootfs alias: {e:#}");
-                        None
-                    }
+        let rootfs_alias = snapshot_rootfs_hint.as_deref().and_then(|p| {
+            match vm::ensure_snapshot_rootfs_path(p, &rootfs_path.to_string_lossy()) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("warning: failed to create snapshot rootfs alias: {e:#}");
+                    None
                 }
-            });
+            }
+        });
         if let Err(e) = vm::load_and_restore_snapshot(
             &sock,
             &subvol,
@@ -313,14 +311,9 @@ impl FirecrackerBackend {
              ip route replace default via {}",
             host_epoch, net_config.guest_ip, net_config.host_ip
         );
-        let cmd = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            cmd_str,
-        ];
+        let cmd = vec!["sh".to_string(), "-c".to_string(), cmd_str];
         let timeout = self.exec_timeout_secs.max(15);
-        let (_, exit_code, timed_out, _) =
-            exec::exec_via_serial(vm_dir, &cmd, timeout)?;
+        let (_, exit_code, timed_out, _) = exec::exec_via_serial(vm_dir, &cmd, timeout)?;
         if timed_out {
             bail!("network reconfiguration timed out");
         }
@@ -551,18 +544,15 @@ impl VmBackend for FirecrackerBackend {
             .as_ref()
             .map(|rec| rec.rootfs.clone())
             .or_else(|| vm::extract_rootfs_path_from_vmstate(&subvol));
-        let rootfs_alias = snapshot_rootfs_hint
-            .as_deref()
-            .and_then(|p| {
-                match vm::ensure_snapshot_rootfs_path(p, &rootfs_path_for_restore.to_string_lossy())
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("warning: failed to create snapshot rootfs alias: {e:#}");
-                        None
-                    }
+        let rootfs_alias = snapshot_rootfs_hint.as_deref().and_then(|p| {
+            match vm::ensure_snapshot_rootfs_path(p, &rootfs_path_for_restore.to_string_lossy()) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("warning: failed to create snapshot rootfs alias: {e:#}");
+                    None
                 }
-            });
+            }
+        });
         if let Err(e) = vm::load_and_restore_snapshot(
             &socket_path,
             &subvol,
