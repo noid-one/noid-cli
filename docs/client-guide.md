@@ -177,9 +177,17 @@ Active VM: my-vm
 
 This is useful when working on a project where each directory corresponds to a different VM.
 
-## Step 8: Checkpoint a running VM
+## Step 8: Snapshot a running VM
 
-Capture the complete state of a running VM -- memory, CPU registers, disk:
+A snapshot (called a "checkpoint" in noid) captures the **complete state** of a running VM at a point in time:
+
+- **Memory** -- every byte of RAM, including in-flight data, open connections, and running processes
+- **CPU state** -- registers, instruction pointer, and device state
+- **Disk** -- the full root filesystem, including any files you've written or packages you've installed
+
+Think of it like hibernating a laptop -- everything freezes in place and can be resumed later exactly as it was.
+
+### Create a snapshot
 
 ```bash
 noid checkpoint --name my-vm --label before-deploy
@@ -189,56 +197,96 @@ noid checkpoint --name my-vm --label before-deploy
 Checkpoint 'a1b2c3d4' created (label: before-deploy)
 ```
 
-The VM pauses briefly (typically under 1 second), snapshots everything, and resumes. Your processes keep running as if nothing happened.
+What happens under the hood:
 
-### Labels are optional
+1. The VM **pauses** (typically under 1 second)
+2. Firecracker writes the memory and CPU state to disk
+3. The root filesystem is copied (using copy-on-write on btrfs, so it's fast)
+4. The VM **resumes** -- processes continue as if nothing happened
+
+The pause is brief enough that network connections and running services generally survive it.
+
+### Labels are optional but recommended
 
 ```bash
-noid checkpoint --name my-vm
+noid checkpoint --name my-vm                          # no label
+noid checkpoint --name my-vm --label clean-install    # with label
+noid checkpoint --name my-vm --label claude-code      # descriptive labels help later
 ```
 
-Works fine without a label, but labels make it easier to identify checkpoints later.
+Good labeling practice: describe what state the VM is in, not when you took the snapshot. The timestamp is recorded automatically.
 
-## Step 9: List checkpoints
+### With an active VM
+
+If you've set an active VM with `noid use`, you can omit `--name`:
+
+```bash
+noid use my-vm
+noid checkpoint --label before-deploy
+```
+
+## Step 9: List snapshots
 
 ```bash
 noid checkpoints my-vm
 ```
 
 ```
-+----------+---------------+---------------------+
-| id       | label         | created             |
-+----------+---------------+---------------------+
-| a1b2c3d4 | before-deploy | 2026-02-12 10:35:00 |
-| e5f67890 |               | 2026-02-12 10:40:00 |
-+----------+---------------+---------------------+
++------------------+-----------------------+---------------------+
+| id               | label                 | created             |
++------------------+-----------------------+---------------------+
+| a1b2c3d4e5f67890 | clean-install         | 2026-02-12 10:35:00 |
+| 63eddf94ead340e2 | claude-code           | 2026-02-12 10:40:00 |
++------------------+-----------------------+---------------------+
 ```
 
-## Step 10: Restore from a checkpoint
+Each checkpoint gets a unique 16-character ID. Use this ID (or any unique prefix of it) when restoring.
+
+## Step 10: Restore from a snapshot
+
+There are two ways to restore: **clone** into a new VM, or **restore in place**.
 
 ### Clone into a new VM
 
-Create a new VM from a checkpoint, leaving the original untouched:
+Create a new VM from a snapshot, leaving the original untouched:
 
 ```bash
-noid restore --name my-vm a1b2c3d4 --as my-vm-copy
+noid restore --name my-vm a1b2c3d4e5f67890 --as my-vm-copy
 ```
 
 ```
-VM 'my-vm-copy' restored from checkpoint 'a1b2c3d4'
+VM 'my-vm-copy' restored from checkpoint 'a1b2c3d4e5f67890'
 ```
 
-The new VM starts from the exact state captured in the checkpoint -- same memory, same running processes, same filesystem. On btrfs, the clone is instant.
+The new VM boots into the exact state captured in the snapshot -- same memory contents, same running processes, same files on disk. It gets its own network identity (new IP address, new TAP device), so it won't conflict with the original.
+
+This is the recommended way to use snapshots for:
+- Spinning up multiple identical VMs from a prepared base image
+- Testing a change without risking your working environment
+- Giving each team member a clone of a shared dev environment
 
 ### Restore in place
 
-Replace the current VM with the checkpoint state:
+Replace the current VM's state with the snapshot:
 
 ```bash
-noid restore --name my-vm a1b2c3d4
+noid restore --name my-vm a1b2c3d4e5f67890
 ```
 
-This destroys the current VM and recreates it from the checkpoint. Use this to "rewind" a VM to a known good state.
+This **destroys the current VM** (kills the process, removes its storage) and recreates it from the snapshot. Use this to "rewind" a VM to a known good state.
+
+**Warning**: Any changes made since the snapshot was taken are lost. There is no undo.
+
+### What happens during restore
+
+1. A new Firecracker process starts
+2. The snapshot's memory and CPU state are loaded
+3. The filesystem is cloned from the checkpoint
+4. The VM's network is reconfigured (new TAP device and IP address)
+5. The guest's clock is updated (it was frozen at snapshot time)
+6. The VM resumes -- processes pick up where they left off
+
+Because the VM gets a new IP address on restore, any hardcoded IP references inside the guest won't be valid. DNS names and hostnames continue to work normally.
 
 ## Step 11: Destroy a VM
 
@@ -256,25 +304,52 @@ This kills the Firecracker process, removes all storage (rootfs, logs, snapshots
 
 ### Development workflow
 
-Use checkpoints as save points while developing inside a VM:
+Use snapshots as save points while developing inside a VM:
 
 ```bash
-# Set up a fresh VM
+# Create a VM and set it as active
 noid create dev
 noid use dev
 
-# Install your dependencies
+# Install tools inside the VM
 noid exec -- apt-get update
-noid exec -- apt-get install -y build-essential
+noid exec -- apt-get install -y build-essential nodejs npm
 
-# Checkpoint the clean state
-noid checkpoint --label clean-install
+# Snapshot the clean state before making changes
+noid checkpoint --label clean-with-tools
 
-# Do some work...
-noid exec -- sh -c "echo 'hello' > /tmp/test.txt"
+# Do your work...
+noid exec -- sh -c "cd /app && npm install && npm run build"
 
-# Something went wrong? Restore the clean state
-noid restore --name dev <checkpoint-id>
+# Something went wrong? Rewind to the clean state
+noid checkpoints dev                          # find the checkpoint ID
+noid restore --name dev <checkpoint-id>       # VM restarts from snapshot
+
+# Happy with the result? Snapshot again before the next risky step
+noid checkpoint --label after-build
+```
+
+### Prepared environment workflow
+
+Set up a VM once, snapshot it, then clone it for each use:
+
+```bash
+# One-time setup: create and configure a base VM
+noid create base
+noid exec --name base -- apt-get update
+noid exec --name base -- apt-get install -y python3 pip git curl
+noid exec --name base -- pip install pytest requests
+
+# Snapshot the prepared environment
+noid checkpoint --name base --label ready
+
+# Later: spin up clones whenever you need a fresh copy
+noid restore --name base <checkpoint-id> --as alice-dev
+noid restore --name base <checkpoint-id> --as bob-dev
+noid restore --name base <checkpoint-id> --as ci-runner
+
+# Each clone starts with all tools pre-installed
+noid exec --name alice-dev -- python3 --version   # works immediately
 ```
 
 ### Testing workflow
@@ -330,9 +405,9 @@ noid destroy "preview-${BRANCH}"
 | `noid info [name]` | Show VM details |
 | `noid exec [--name NAME] -- <command...>` | Run a command inside a VM |
 | `noid console [name]` | Attach interactive serial console (~D to detach) |
-| `noid checkpoint [--name NAME] [--label TEXT]` | Snapshot a running VM |
-| `noid checkpoints [name]` | List checkpoints for a VM |
-| `noid restore [--name NAME] <id> [--as NEW]` | Restore from a checkpoint |
+| `noid checkpoint [--name NAME] [--label TEXT]` | Snapshot a running VM (memory + disk + CPU) |
+| `noid checkpoints [name]` | List snapshots for a VM |
+| `noid restore [--name NAME] <id> [--as NEW]` | Restore or clone a VM from a snapshot |
 | `noid destroy [name]` | Stop and remove a VM |
 
 Commands that show `[name]` use a positional argument. Commands that show `[--name NAME]` use a flag. All are optional if an active VM is set via `noid use`.
