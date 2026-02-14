@@ -76,13 +76,15 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
         if event::poll(Duration::from_millis(10))? {
             match event::read()? {
                 Event::Paste(text) => {
-                    // Bracketed paste: send entire pasted text as one frame
+                    // Bracketed paste: send entire pasted text as one frame.
+                    // Translate newlines to CR (what real terminals send for Enter).
+                    // Normalize \r\n first to avoid double-CR.
                     if !text.is_empty() {
-                        if !send_stdin(&mut ws, text.as_bytes()) {
+                        let translated = text.replace("\r\n", "\r").replace('\n', "\r");
+                        if !send_stdin(&mut ws, translated.as_bytes()) {
                             break;
                         }
-                        // Update after_newline based on last char of paste
-                        after_newline = text.ends_with('\n') || text.ends_with('\r');
+                        after_newline = translated.ends_with('\r');
                         tilde_pending = false;
                     }
                 }
@@ -176,7 +178,7 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
                 let s = c.encode_utf8(&mut buf);
                 Some(s.as_bytes().to_vec())
             }
-            KeyCode::Enter => Some(b"\n".to_vec()),
+            KeyCode::Enter => Some(b"\r".to_vec()),
             KeyCode::Backspace => Some(vec![0x7f]),
             KeyCode::Tab => Some(b"\t".to_vec()),
             KeyCode::Esc => Some(vec![0x1b]),

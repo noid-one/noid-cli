@@ -100,7 +100,7 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
                 let s = c.encode_utf8(&mut buf);
                 Some(s.as_bytes().to_vec())
             }
-            KeyCode::Enter => Some(b"\n".to_vec()),
+            KeyCode::Enter => Some(b"\r".to_vec()),
             KeyCode::Backspace => Some(vec![0x7f]),
             KeyCode::Tab => Some(b"\t".to_vec()),
             KeyCode::Esc => Some(vec![0x1b]),

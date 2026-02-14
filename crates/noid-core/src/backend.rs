@@ -231,7 +231,7 @@ impl FirecrackerBackend {
                 eprintln!("warning: failed to reconfigure guest network: {e:#}");
                 // Send Ctrl+C only when the command appears hung.
                 if e.to_string().contains("timed out") {
-                    let _ = vm::write_to_serial(&subvol, b"\x03\n");
+                    let _ = vm::write_to_serial(&subvol, b"\x03\r");
                 }
             }
         }
@@ -581,7 +581,7 @@ impl VmBackend for FirecrackerBackend {
                 eprintln!("warning: failed to reconfigure guest network: {e:#}");
                 // Send Ctrl+C only when the command appears hung.
                 if e.to_string().contains("timed out") {
-                    let _ = vm::write_to_serial(&subvol, b"\x03\n");
+                    let _ = vm::write_to_serial(&subvol, b"\x03\r");
                 }
             }
         }
