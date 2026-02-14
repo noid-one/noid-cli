@@ -11,6 +11,17 @@ use tungstenite::WebSocket;
 
 use crate::api::ApiClient;
 
+/// Send data to the VM's stdin over the WebSocket. Returns false if the send fails.
+fn send_stdin(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>, data: &[u8]) -> bool {
+    let mut frame = Vec::with_capacity(1 + data.len());
+    frame.push(CHANNEL_STDIN);
+    frame.extend_from_slice(data);
+    set_ws_nonblocking(ws, false);
+    let ok = ws.send(Message::Binary(frame)).is_ok();
+    set_ws_nonblocking(ws, true);
+    ok
+}
+
 pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
     let mut ws = api
         .ws_connect(
@@ -19,17 +30,25 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
         )
         .context("failed to connect to console WebSocket")?;
 
-    println!("Attached to '{vm_name}' serial console. Press Ctrl+Q to detach.");
+    println!("Attached to '{vm_name}' serial console.");
+    println!("Use ~. to detach (Enter, then ~, then .)");
 
     terminal::enable_raw_mode().context("failed to enable raw terminal mode")?;
+
+    let mut stdout = std::io::stdout();
+
+    // Enable bracketed paste so multi-char pastes arrive as a single Event::Paste
+    let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
+
+    // SSH-style ~. escape sequence state
+    let mut after_newline = true; // starts true so ~. works immediately
+    let mut tilde_pending = false;
 
     // We can't easily share the WS across threads, so we use a single-threaded
     // approach with non-blocking polling.
 
     // Set the underlying stream to non-blocking if it's a TCP stream
     set_ws_nonblocking(&mut ws, true);
-
-    let mut stdout = std::io::stdout();
 
     loop {
         // Check for incoming WS messages
@@ -55,24 +74,73 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
 
         // Check for keyboard input (non-blocking)
         if event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = event::read()? {
-                // Ctrl+Q to detach
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
-                    break;
+            match event::read()? {
+                Event::Paste(text) => {
+                    // Bracketed paste: send entire pasted text as one frame
+                    if !text.is_empty() {
+                        if !send_stdin(&mut ws, text.as_bytes()) {
+                            break;
+                        }
+                        // Update after_newline based on last char of paste
+                        after_newline = text.ends_with('\n') || text.ends_with('\r');
+                        tilde_pending = false;
+                    }
                 }
-
-                if let Some(bytes) = key_to_bytes(&key) {
-                    let mut frame = Vec::with_capacity(1 + bytes.len());
-                    frame.push(CHANNEL_STDIN);
-                    frame.extend_from_slice(&bytes);
-
-                    // Set blocking for sends
-                    set_ws_nonblocking(&mut ws, false);
-                    if ws.send(Message::Binary(frame)).is_err() {
+                Event::Key(key) => {
+                    // Ctrl+Q to detach (silent fallback, not advertised)
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('q')
+                    {
                         break;
                     }
-                    set_ws_nonblocking(&mut ws, true);
+
+                    // SSH-style ~. escape: only for unmodified keys (or Shift)
+                    let has_ctrl_alt = key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+
+                    if !has_ctrl_alt {
+                        if tilde_pending {
+                            tilde_pending = false;
+                            match key.code {
+                                KeyCode::Char('.') => {
+                                    // ~. = detach
+                                    break;
+                                }
+                                KeyCode::Char('~') => {
+                                    // ~~ = send one literal ~
+                                    if !send_stdin(&mut ws, b"~") {
+                                        break;
+                                    }
+                                    after_newline = false;
+                                    continue;
+                                }
+                                _ => {
+                                    // ~<other> = flush buffered ~ then handle char normally
+                                    if !send_stdin(&mut ws, b"~") {
+                                        break;
+                                    }
+                                    // Fall through to send the current key below
+                                }
+                            }
+                        } else if after_newline && key.code == KeyCode::Char('~') {
+                            // Start of potential escape sequence — buffer the ~
+                            tilde_pending = true;
+                            continue;
+                        }
+                    }
+
+                    // Normal key handling
+                    if let Some(bytes) = key_to_bytes(&key) {
+                        if !send_stdin(&mut ws, &bytes) {
+                            break;
+                        }
+                        // Track newline state
+                        after_newline = key.code == KeyCode::Enter;
+                        tilde_pending = false;
+                    }
                 }
+                _ => {}
             }
         }
     }
@@ -80,6 +148,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
     set_ws_nonblocking(&mut ws, false);
     let _ = ws.close(None);
     let _ = ws.send(Message::Close(None));
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableBracketedPaste);
     terminal::disable_raw_mode()?;
     println!("\r\n--- Detached ---");
     Ok(())
