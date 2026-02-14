@@ -298,13 +298,14 @@ useradd -m -s /bin/bash -G sudo noid
 passwd -d noid
 echo 'noid ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/noid
 chmod 0440 /etc/sudoers.d/noid
+touch /home/noid/.hushlogin
 
 # Serial console
 mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
 cat > /etc/systemd/system/serial-getty@ttyS0.service.d/override.conf << 'EOF'
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty --autologin root --keep-baud 115200,57600,38400,9600 ttyS0 $TERM
+ExecStart=-/sbin/agetty --autologin noid --noissue --keep-baud 115200,57600,38400,9600 ttyS0 $TERM
 EOF
 systemctl enable serial-getty@ttyS0.service
 
@@ -332,6 +333,8 @@ systemctl mask e2scrub_all.timer
 systemctl mask fstrim.timer
 systemctl mask logrotate.timer
 systemctl mask motd-news.timer
+rm -rf /etc/update-motd.d/*
+: > /etc/legal
 systemctl mask dpkg-db-backup.timer
 systemctl mask console-setup.service
 systemctl mask systemd-update-utmp.service
