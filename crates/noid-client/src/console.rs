@@ -31,7 +31,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
         .context("failed to connect to console WebSocket")?;
 
     println!("Attached to '{vm_name}' serial console.");
-    println!("Use ~D to detach (Enter, then ~, then D)");
+    println!("Press Ctrl+\\ to detach (or type 'exit')");
 
     terminal::enable_raw_mode().context("failed to enable raw terminal mode")?;
 
@@ -43,6 +43,9 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
     // SSH-style ~D escape sequence state
     let mut after_newline = true; // starts true so ~D works immediately
     let mut tilde_pending = false;
+
+    // Line buffer for "exit" detection
+    let mut line_buffer = String::new();
 
     // We can't easily share the WS across threads, so we use a single-threaded
     // approach with non-blocking polling.
@@ -81,17 +84,46 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
                     // Normalize \r\n first to avoid double-CR.
                     if !text.is_empty() {
                         let translated = text.replace("\r\n", "\r").replace('\n', "\r");
+
+                        // Check if any line in the pasted text is "exit"
+                        let lines: Vec<&str> = translated.split('\r').collect();
+                        for (i, line) in lines.iter().enumerate() {
+                            let is_last = i == lines.len() - 1;
+                            if !is_last && line.trim() == "exit" {
+                                // Send Ctrl+U to clear the VM's input line, then detach
+                                let _ = send_stdin(&mut ws, b"\x15");
+                                set_ws_nonblocking(&mut ws, false);
+                                let _ = ws.send(Message::Close(None));
+                                let _ = ws.close(None);
+                                let _ = crossterm::execute!(
+                                    stdout,
+                                    crossterm::event::DisableBracketedPaste
+                                );
+                                terminal::disable_raw_mode()?;
+                                println!("\r\n--- Detached ---");
+                                return Ok(());
+                            }
+                        }
+
                         if !send_stdin(&mut ws, translated.as_bytes()) {
                             break;
+                        }
+                        // Update line_buffer with the last incomplete line
+                        if let Some(last) = lines.last() {
+                            if translated.ends_with('\r') {
+                                line_buffer.clear();
+                            } else {
+                                line_buffer = last.to_string();
+                            }
                         }
                         after_newline = translated.ends_with('\r');
                         tilde_pending = false;
                     }
                 }
                 Event::Key(key) => {
-                    // Ctrl+Q to detach (silent fallback, not advertised)
+                    // Ctrl+\ to detach
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('q')
+                        && key.code == KeyCode::Char('\\')
                     {
                         break;
                     }
@@ -134,6 +166,39 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
 
                     // Normal key handling
                     if let Some(bytes) = key_to_bytes(&key) {
+                        // Track line buffer for "exit" detection
+                        match key.code {
+                            KeyCode::Char(c)
+                                if !key
+                                    .modifiers
+                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                            {
+                                line_buffer.push(c);
+                            }
+                            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                // Ctrl+U (clear line) and Ctrl+C (interrupt) both abandon the current line
+                                if c == 'u' || c == 'c' {
+                                    line_buffer.clear();
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                line_buffer.pop();
+                            }
+                            KeyCode::Enter => {
+                                if line_buffer.trim() == "exit" {
+                                    // Send Ctrl+U to clear any buffered input in the VM's shell
+                                    // before we detach, preventing the "exit" from executing
+                                    let _ = send_stdin(&mut ws, b"\x15");
+                                    break;
+                                }
+                                line_buffer.clear();
+                            }
+                            _ => {
+                                // Arrows, Tab, etc. break simple line assumption
+                                line_buffer.clear();
+                            }
+                        }
+
                         if !send_stdin(&mut ws, &bytes) {
                             break;
                         }
@@ -166,8 +231,15 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char(c) => {
-                let ctrl = (c as u8).wrapping_sub(b'a').wrapping_add(1);
-                Some(vec![ctrl])
+                // Ctrl+A = 0x01, Ctrl+B = 0x02, ... Ctrl+Z = 0x1A
+                // Handle both upper and lowercase
+                let lower = c.to_ascii_lowercase();
+                if lower.is_ascii_lowercase() {
+                    let ctrl = (lower as u8) - b'a' + 1;
+                    Some(vec![ctrl])
+                } else {
+                    None
+                }
             }
             _ => None,
         }

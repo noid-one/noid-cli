@@ -18,7 +18,7 @@ pub fn attach_console(vm_name: &str) -> Result<()> {
         anyhow::bail!("serial.log not found for VM '{vm_name}' — is it running?");
     }
 
-    println!("Attached to '{vm_name}' serial console. Press Ctrl+Q to detach.");
+    println!("Attached to '{vm_name}' serial console. Press Ctrl+\\ to detach (or type 'exit').");
 
     terminal::enable_raw_mode().context("failed to enable raw terminal mode")?;
 
@@ -54,16 +54,52 @@ pub fn attach_console(vm_name: &str) -> Result<()> {
 
     let vm_name_owned = vm_name.to_string();
 
+    // Line buffer for "exit" detection
+    let mut line_buffer = String::new();
+
     // Main loop: read keystrokes, send to VM serial input
     loop {
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                // Ctrl+Q to detach
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
+                // Ctrl+\ to detach
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('\\') {
                     break;
                 }
 
                 if let Some(bytes) = key_to_bytes(&key) {
+                    // Track line buffer for "exit" detection
+                    match key.code {
+                        KeyCode::Char(c)
+                            if !key
+                                .modifiers
+                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                        {
+                            line_buffer.push(c);
+                        }
+                        KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+U (clear line) and Ctrl+C (interrupt) both abandon the current line
+                            if c == 'u' || c == 'c' {
+                                line_buffer.clear();
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            line_buffer.pop();
+                        }
+                        KeyCode::Enter => {
+                            if line_buffer.trim() == "exit" {
+                                // Send Ctrl+U to clear any buffered input in the VM's shell
+                                // before we detach, preventing the "exit" from executing
+                                let _ = vm::write_to_serial(&vm_name_owned, b"\x15");
+                                break;
+                            }
+                            line_buffer.clear();
+                        }
+                        _ => {
+                            // Arrows, Tab, etc. break simple line assumption
+                            line_buffer.clear();
+                        }
+                    }
+
                     if let Err(e) = vm::write_to_serial(&vm_name_owned, &bytes) {
                         let mut stdout = io::stdout().lock();
                         let _ = writeln!(stdout, "\r\n[serial write error: {e}]");
@@ -88,8 +124,14 @@ fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
         match key.code {
             KeyCode::Char(c) => {
                 // Ctrl+A = 0x01, Ctrl+B = 0x02, ... Ctrl+Z = 0x1A
-                let ctrl = (c as u8).wrapping_sub(b'a').wrapping_add(1);
-                Some(vec![ctrl])
+                // Handle both upper and lowercase
+                let lower = c.to_ascii_lowercase();
+                if lower.is_ascii_lowercase() {
+                    let ctrl = (lower as u8) - b'a' + 1;
+                    Some(vec![ctrl])
+                } else {
+                    None
+                }
             }
             _ => None,
         }
