@@ -127,7 +127,7 @@ pub fn create_vm(
         "/boot-source",
         &serde_json::json!({
             "kernel_image_path": kernel,
-            "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+            "boot_args": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw"
         }),
     )
     .context("failed to set boot source")?;

@@ -34,17 +34,36 @@ cp target/release/noid $HOME/.local/bin/
 
 ## Step 2: Get a kernel and rootfs
 
-The easiest way is to run the install script, which downloads the kernel and builds an Ubuntu 25.04 rootfs automatically:
+The easiest way is to run the install script, which builds the kernel from source and creates an Ubuntu 25.04 rootfs automatically:
 
 ```bash
 sudo bash scripts/install-server.sh
 ```
 
-To download the kernel manually:
+The installer builds kernel **6.12.71** from [kernel.org](https://www.kernel.org/) source using Firecracker's recommended config as a base. This takes 5-15 minutes on first run.
+
+### Kernel version verification
+
+The installer validates the existing kernel on every run. If `~/vmlinux.bin` exists but is the wrong version, it is replaced automatically:
+
+```
+[skip] kernel at /home/firecracker/vmlinux.bin is version 4.14, expected 6.12 — replacing
+```
+
+When the kernel is replaced, the **golden snapshot is also invalidated** (deleted and rebuilt), since a snapshot captured under the old kernel carries stale device state.
+
+To check your kernel version manually:
 
 ```bash
-curl -fsSL -o ~/vmlinux.bin \
-  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux-6.1.bin"
+strings ~/vmlinux.bin | grep -oP 'Linux version \K[0-9]+\.[0-9]+\.[0-9]+' | head -1
+# Expected: 6.12.71
+```
+
+If you need to force a kernel rebuild (e.g., after a patch version bump in `install-server.sh`):
+
+```bash
+rm ~/vmlinux.bin
+sudo bash scripts/install-server.sh
 ```
 
 The rootfs is built by `install-server.sh` using debootstrap (Ubuntu 25.04 / plucky). See the script for details.
@@ -405,7 +424,56 @@ If noid-netd failed to detect the default interface, the network may not have be
 
 ### HTTPS/TLS hangs inside VMs
 
-The guest needs entropy for TLS. Firecracker VMs include a `virtio-rng` device that provides `/dev/urandom` from the host. If HTTPS hangs, verify the VM config includes the rng device (this is set automatically by noid-server).
+TLS requires a seeded CRNG (cryptographic random number generator). Three things can cause TLS hangs:
+
+**1. Stale kernel (most common)**
+
+Old kernels (e.g. 4.14) take minutes to initialize the CRNG without `virtio-rng`. The installer now uses kernel 6.12 which initializes CRNG within seconds via the `virtio-rng` device.
+
+Check your kernel version:
+
+```bash
+strings ~/vmlinux.bin | grep -oP 'Linux version \K[0-9]+\.[0-9]+' | head -1
+# Should be: 6.12
+```
+
+If it shows an old version (4.14, 5.10, etc.), re-run the installer:
+
+```bash
+sudo bash scripts/install-server.sh
+```
+
+**2. Stale golden snapshot**
+
+If the golden snapshot was captured under an old kernel, restored VMs inherit the old kernel's uninitialized CRNG state. The installer invalidates the golden snapshot when replacing the kernel, but if you replaced the kernel manually:
+
+```bash
+rm -rf ~/.noid/golden
+sudo bash scripts/install-server.sh
+```
+
+**3. MTU/MSS mismatch**
+
+If the upstream network has a smaller MTU than the VM's default 1500, large TLS packets get silently dropped. The installer and `noid-netd` both add a TCP MSS clamping rule to handle this. Verify:
+
+```bash
+sudo iptables -t mangle -L FORWARD -v -n
+# Should show: TCPMSS ... --clamp-mss-to-pmtu
+```
+
+**Validation commands:**
+
+```bash
+# Quick TLS test from inside a VM (should complete in <5s)
+noid exec --name myvm -- curl -sS -o /dev/null -w '%{http_code}' https://example.com
+
+# Check entropy inside VM
+noid exec --name myvm -- cat /proc/sys/kernel/random/entropy_avail
+
+# Run the automated tests
+bash scripts/test-e2e-tls.sh
+bash scripts/test-golden-entropy.sh
+```
 
 ### Database locked errors
 
@@ -440,3 +508,19 @@ sudo systemctl start noid-server
 ```
 
 Start noid-netd before noid-server -- the server needs noid-netd for VM networking.
+
+### When to rebuild the golden snapshot
+
+The golden snapshot must be rebuilt when any of these change:
+
+| Changed | Action |
+|---|---|
+| Kernel image (`vmlinux.bin`) | `rm -rf ~/.noid/golden && sudo bash scripts/install-server.sh` |
+| Base rootfs (`rootfs.ext4`) | `rm -rf ~/.noid/golden && sudo bash scripts/install-server.sh` |
+| VM default config (cpus, mem) | `rm -rf ~/.noid/golden && sudo bash scripts/install-server.sh` |
+| Firecracker version | `rm -rf ~/.noid/golden && sudo bash scripts/install-server.sh` |
+| noid-server binary only | No rebuild needed (golden is independent of server code) |
+
+The installer automatically invalidates the golden snapshot when it replaces the kernel. For other changes, delete it manually before re-running the installer.
+
+Running `sudo bash scripts/install-server.sh` is always safe — it skips components that are already up to date and only rebuilds what changed.

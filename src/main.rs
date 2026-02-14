@@ -155,7 +155,7 @@ fn main() -> Result<()> {
                     config.resolve_kernel(None).unwrap_or_default(),
                     snap_dir.join("rootfs.ext4").to_string_lossy().to_string(),
                     1,
-                    256,
+                    2048,
                 )
             };
 

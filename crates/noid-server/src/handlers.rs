@@ -54,7 +54,7 @@ pub fn capabilities(state: &Arc<ServerState>) -> ResponseBuilder {
             console_timeout_secs: state.config.console_timeout_secs,
             max_vm_name_length: 64,
             default_cpus: 1,
-            default_mem_mib: 256,
+            default_mem_mib: 2048,
         },
     )
 }

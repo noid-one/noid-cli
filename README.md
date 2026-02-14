@@ -49,18 +49,13 @@ The server needs a Linux host with KVM support (`/dev/kvm`), Firecracker install
 
 ### 1. Get a kernel and rootfs
 
-The install script handles everything (kernel download, rootfs build, networking, Firecracker):
+The install script handles everything (kernel build, rootfs build, networking, Firecracker):
 
 ```bash
 sudo bash scripts/install-server.sh
 ```
 
-Or download the kernel manually and provide your own rootfs:
-
-```bash
-curl -fsSL -o ~/vmlinux.bin \
-  "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux-6.1.bin"
-```
+This builds kernel 6.12.71 from source and creates an Ubuntu 25.04 rootfs. Re-running the installer is safe — it validates the existing kernel version and only rebuilds if the version doesn't match. If you previously had an older kernel (e.g. 4.14 or 6.1), it will be replaced automatically.
 
 ### 2. Configure and start the server
 
@@ -120,7 +115,7 @@ noid create beefy-vm --cpus 4 --mem 512
 
 ```bash
 noid exec --name my-vm -- uname -a
-# Linux ubuntu-fc-uvm 4.14.174 ...
+# Linux noid 6.12.71 ...
 ```
 
 Set an active VM to skip `--name`:

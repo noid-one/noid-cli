@@ -598,7 +598,7 @@ impl VmBackend for FirecrackerBackend {
                 self.kernel.clone(),
                 subvol.join("rootfs.ext4").to_string_lossy().to_string(),
                 1,
-                256,
+                2048,
             )
         };
 

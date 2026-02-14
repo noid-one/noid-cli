@@ -22,7 +22,7 @@ fn default_cpus() -> u32 {
     1
 }
 fn default_mem_mib() -> u32 {
-    256
+    2048
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,7 +129,7 @@ mod tests {
         let json = r#"{"name":"test"}"#;
         let req: CreateVmRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.cpus, 1);
-        assert_eq!(req.mem_mib, 256);
+        assert_eq!(req.mem_mib, 2048);
     }
 
     #[test]

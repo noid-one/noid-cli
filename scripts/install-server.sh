@@ -5,13 +5,14 @@ set -euo pipefail
 
 FC_VERSION="1.14.1"
 FC_ARCH="x86_64"
-KERNEL_VERSION="6.1"
+KERNEL_FULL_VERSION="6.12.71"
 NOID_DIR="/home/firecracker"
 NOID_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="/usr/local/bin"
 USER_BIN_DIR="${NOID_DIR}/.local/bin"
 ROOTFS_PATH="${NOID_DIR}/rootfs.ext4"
 KERNEL_PATH="${NOID_DIR}/vmlinux.bin"
+GOLDEN_DIR="${NOID_DIR}/.noid/golden"
 
 # Colors for output
 RED='\033[0;31m'
@@ -42,6 +43,7 @@ apt-get install -y -qq \
     debootstrap e2fsprogs \
     iptables iproute2 \
     acl \
+    flex bison libelf-dev libssl-dev bc binutils \
     > /dev/null
 echo "    done"
 
@@ -88,14 +90,91 @@ fi
 # --- Step 4: Kernel ---
 
 step "Checking kernel image"
+NEED_KERNEL=0
 if [ -f "$KERNEL_PATH" ]; then
-    warn "kernel already exists at ${KERNEL_PATH}"
+    CURRENT_VERSION=$(strings "$KERNEL_PATH" | grep -oP 'Linux version \K[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+    if [ -z "$CURRENT_VERSION" ]; then
+        warn "kernel at ${KERNEL_PATH} has unknown version — replacing"
+        NEED_KERNEL=1
+    elif [ "$CURRENT_VERSION" = "$KERNEL_FULL_VERSION" ]; then
+        warn "kernel ${KERNEL_FULL_VERSION} already exists at ${KERNEL_PATH}"
+    else
+        warn "kernel at ${KERNEL_PATH} is version ${CURRENT_VERSION}, expected ${KERNEL_FULL_VERSION} — replacing"
+        NEED_KERNEL=1
+    fi
 else
-    echo "    Downloading Firecracker kernel ${KERNEL_VERSION}..."
-    KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/${FC_ARCH}/kernels/vmlinux-${KERNEL_VERSION}.bin"
-    wget -q -O "$KERNEL_PATH" "$KERNEL_URL"
+    NEED_KERNEL=1
+fi
+if [ "$NEED_KERNEL" = "1" ]; then
+    echo "    Building kernel ${KERNEL_FULL_VERSION} from source (this takes a while)..."
+    KERNEL_BUILD_DIR=$(mktemp -d)
+
+    # Download kernel source
+    KERNEL_TARBALL_URL="https://www.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_FULL_VERSION}.tar.xz"
+    echo "    Downloading ${KERNEL_TARBALL_URL}..."
+    wget -q -O "${KERNEL_BUILD_DIR}/linux.tar.xz" "$KERNEL_TARBALL_URL"
+    tar -xf "${KERNEL_BUILD_DIR}/linux.tar.xz" -C "$KERNEL_BUILD_DIR"
+    KERNEL_SRC="${KERNEL_BUILD_DIR}/linux-${KERNEL_FULL_VERSION}"
+
+    # Start from x86_64 defconfig — the standard config that includes all
+    # virtio, block, and serial drivers as built-in. This is more reliable
+    # than adapting the Firecracker CI 6.1 config via olddefconfig, which
+    # silently drops or modularizes critical drivers on newer kernels.
+    echo "    Generating x86_64 defconfig..."
+    make -C "$KERNEL_SRC" defconfig > /dev/null 2>&1
+
+    # Overlay Firecracker-specific options on top of defconfig.
+    # Bake root=/dev/vda into the kernel — Firecracker presents the rootfs
+    # as a virtio-blk device at /dev/vda. Without this, the kernel panics
+    # with "VFS: Unable to mount root fs on unknown-block(0,0)".
+    "${KERNEL_SRC}/scripts/config" --file "${KERNEL_SRC}/.config" \
+        --enable VIRTIO_MMIO \
+        --enable VIRTIO_BLK \
+        --enable VIRTIO_NET \
+        --enable VIRTIO_CONSOLE \
+        --enable VIRTIO_BALLOON \
+        --enable HW_RANDOM_VIRTIO \
+        --enable SERIAL_8250 \
+        --enable SERIAL_8250_CONSOLE \
+        --enable EXT4_FS \
+        --enable DEVTMPFS \
+        --enable DEVTMPFS_MOUNT \
+        --set-str CMDLINE "root=/dev/vda rw console=ttyS0" \
+        --enable CMDLINE_BOOL
+
+    # Resolve dependencies after config tweaks
+    make -C "$KERNEL_SRC" olddefconfig > /dev/null 2>&1
+
+    # Verify critical options are =y (not =m) — fail if any are wrong.
+    echo "    Verifying kernel config..."
+    CONFIG="${KERNEL_SRC}/.config"
+    for opt in VIRTIO VIRTIO_MMIO VIRTIO_BLK EXT4_FS SERIAL_8250 SERIAL_8250_CONSOLE; do
+        if ! grep -q "CONFIG_${opt}=y" "$CONFIG"; then
+            echo "    FATAL: CONFIG_${opt} is not =y in .config:"
+            grep "CONFIG_${opt}" "$CONFIG" || echo "    (missing entirely)"
+            rm -rf "$KERNEL_BUILD_DIR"
+            fail "kernel config verification failed: CONFIG_${opt} must be =y"
+        fi
+    done
+    echo "    Config OK: all critical options are built-in"
+
+    # Build uncompressed vmlinux (what Firecracker expects on x86_64)
+    echo "    Compiling vmlinux ($(nproc) jobs)..."
+    if ! make -C "$KERNEL_SRC" vmlinux -j"$(nproc)" 2>&1 | tail -20; then
+        rm -rf "$KERNEL_BUILD_DIR"
+        fail "kernel compilation failed"
+    fi
+
+    cp "${KERNEL_SRC}/vmlinux" "$KERNEL_PATH"
     chown firecracker:firecracker "$KERNEL_PATH"
+    rm -rf "$KERNEL_BUILD_DIR"
     echo "    saved: ${KERNEL_PATH} ($(du -h "$KERNEL_PATH" | cut -f1))"
+
+    # Invalidate golden snapshot — new kernel requires new snapshot
+    if [ -d "$GOLDEN_DIR" ]; then
+        echo "    Invalidating golden snapshot (kernel changed)"
+        rm -rf "$GOLDEN_DIR"
+    fi
 fi
 
 # --- Step 5: Build noid ---
@@ -145,6 +224,9 @@ if ! iptables -C FORWARD -i noid+ -o "$DEFAULT_IF" -j ACCEPT 2>/dev/null; then
 fi
 if ! iptables -C FORWARD -i "$DEFAULT_IF" -o noid+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
     iptables -A FORWARD -i "$DEFAULT_IF" -o noid+ -m state --state RELATED,ESTABLISHED -j ACCEPT
+fi
+if ! iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; then
+    iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 fi
 echo "    NAT: 172.16.0.0/16 via ${DEFAULT_IF}"
 
@@ -255,6 +337,10 @@ systemctl mask console-setup.service
 systemctl mask systemd-update-utmp.service
 systemctl mask systemd-update-utmp-runlevel.service
 
+# Disable bracketed paste mode — its ANSI escapes (\e[?2004h/l) pollute
+# serial.log and can break exec marker parsing.
+echo 'set enable-bracketed-paste off' >> /etc/inputrc
+
 # Cleanup
 systemctl disable apt-daily.timer 2>/dev/null || true
 systemctl disable apt-daily-upgrade.timer 2>/dev/null || true
@@ -292,7 +378,6 @@ fi
 # --- Step 9: Golden snapshot ---
 
 step "Creating golden snapshot"
-GOLDEN_DIR="${NOID_DIR}/.noid/golden"
 
 if [ -f "${GOLDEN_DIR}/memory.snap" ]; then
     warn "golden snapshot already exists at ${GOLDEN_DIR}"
@@ -339,11 +424,28 @@ GCEOF
     sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
         noid create _golden
 
-    # Wait for VM to be ready (poll with exec)
+    # Wait for VM to be ready (poll with exec).
+    # Detect kernel panic early via serial.log to avoid burning 60x30s retries.
     echo "    Waiting for VM to boot..."
     RETRIES=0
     MAX_RETRIES=60
+    GOLDEN_VM_DIR=""
     while [ "$RETRIES" -lt "$MAX_RETRIES" ]; do
+        # Re-discover VM dir on each iteration (directory may not exist yet on first pass)
+        if [ -z "${GOLDEN_VM_DIR}" ]; then
+            GOLDEN_VM_DIR=$(find "${NOID_DIR}/.noid/storage/users" -mindepth 3 -maxdepth 3 -type d -path "*/vms/_golden" 2>/dev/null | head -1)
+        fi
+        # Fail fast: check serial.log for kernel panic before burning a 30s exec timeout
+        if [ -n "${GOLDEN_VM_DIR}" ] && [ -f "${GOLDEN_VM_DIR}/serial.log" ]; then
+            if grep -q "Kernel panic" "${GOLDEN_VM_DIR}/serial.log" 2>/dev/null; then
+                echo ""
+                echo -e "    ${RED}Kernel panic detected in template VM:${NC}"
+                head -5 "${GOLDEN_VM_DIR}/serial.log" | sed 's/^/    /'
+                echo ""
+                echo -e "    ${YELLOW}The kernel cannot boot. Check kernel config and rebuild.${NC}"
+                break
+            fi
+        fi
         if sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
             noid exec --name _golden -- echo ready 2>/dev/null | grep -q ready; then
             break
@@ -351,9 +453,10 @@ GCEOF
         RETRIES=$((RETRIES + 1))
         sleep 2
     done
-    if [ "$RETRIES" -ge "$MAX_RETRIES" ]; then
+    if [ "$RETRIES" -ge "$MAX_RETRIES" ] || \
+       { [ -n "${GOLDEN_VM_DIR}" ] && [ -f "${GOLDEN_VM_DIR}/serial.log" ] && grep -q "Kernel panic" "${GOLDEN_VM_DIR}/serial.log" 2>/dev/null; }; then
         echo ""
-        echo -e "    ${RED}Template VM failed to boot within timeout${NC}"
+        echo -e "    ${RED}Template VM failed to boot${NC}"
         echo -e "    ${YELLOW}VMs will use slow cold-boot (no golden snapshot)${NC}"
         echo ""
         sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
@@ -388,7 +491,7 @@ GCEOF
 
         # Write template config for compatibility checking
         cat > "${GOLDEN_DIR}/config.json" << CONFEOF
-{"cpus": 1, "mem_mib": 256, "snapshot_rootfs_path": "${VM_DIR}/rootfs.ext4"}
+{"cpus": 1, "mem_mib": 2048, "snapshot_rootfs_path": "${VM_DIR}/rootfs.ext4"}
 CONFEOF
         chown -R firecracker:firecracker "$GOLDEN_DIR"
         echo "    Golden snapshot saved to ${GOLDEN_DIR}"

@@ -64,7 +64,8 @@ pub fn exec_via_serial(
 
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let content = std::fs::read_to_string(&serial_path)?;
+        let bytes = std::fs::read(&serial_path)?;
+        let content = String::from_utf8_lossy(&bytes);
         if content.len() as u64 <= start_pos {
             continue;
         }
@@ -85,13 +86,55 @@ pub fn exec_via_serial(
     }
 }
 
+/// Strip ANSI escape sequences (CSI, OSC, etc.) that shells and terminals
+/// inject into serial output. Without this, escape-prefixed marker lines
+/// (e.g. `\x1b[?2004hNOID_EXEC_...`) fail exact-match detection.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // CSI: ESC [ ... final_byte
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&ch) = chars.peek() {
+                    chars.next();
+                    if ch.is_ascii_alphabetic() || ch == '~' || ch == 'h' || ch == 'l' {
+                        break;
+                    }
+                }
+            // OSC: ESC ] ... ST (BEL or ESC \)
+            } else if chars.peek() == Some(&']') {
+                chars.next();
+                while let Some(&ch) = chars.peek() {
+                    chars.next();
+                    if ch == '\x07' {
+                        break;
+                    }
+                    if ch == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            } else if chars.peek().is_some() {
+                // Other escape — consume one more char if available
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn parse_marked_output(
     serial_chunk: &str,
     marker_start: &str,
     marker_end: &str,
     marker_exit: &str,
 ) -> Option<(String, Option<i32>)> {
-    let normalized = serial_chunk.replace("\r\n", "\n").replace('\r', "\n");
+    let cleaned = strip_ansi(serial_chunk);
+    let normalized = cleaned.replace("\r\n", "\n").replace('\r', "\n");
     let mut collecting = false;
     let mut lines = Vec::new();
     let mut exit_code = None;
@@ -186,6 +229,56 @@ mod tests {
         .expect("should parse");
         assert_eq!(parsed.0, "hello");
         assert_eq!(parsed.1, Some(0));
+    }
+
+    #[test]
+    fn parse_marked_output_handles_ansi_escapes() {
+        // Bracketed paste mode escapes and other ANSI sequences should not crash parsing
+        let serial = "\x1b[?2004h\r\nNOID_EXEC_ff00\r\n\x1b[?2004lhello world\r\nNOID_EXEC_ff00_EXIT0\r\nNOID_EXEC_ff00_END\r\n\x1b[?2004h";
+        let parsed = parse_marked_output(
+            serial,
+            "NOID_EXEC_ff00",
+            "NOID_EXEC_ff00_END",
+            "NOID_EXEC_ff00_EXIT",
+        )
+        .expect("should parse despite ANSI escapes");
+        assert_eq!(parsed.1, Some(0));
+        assert!(parsed.0.contains("hello world"));
+    }
+
+    #[test]
+    fn parse_marked_output_ansi_prefix_on_marker_line() {
+        // Escape sequence directly prefixed to marker — previously broke exact-match
+        let serial = "\x1b[?2004h\x1b[?2004lNOID_EXEC_ab12\r\noutput line\r\nNOID_EXEC_ab12_EXIT0\r\n\x1b[?2004hNOID_EXEC_ab12_END\r\n";
+        let parsed = parse_marked_output(
+            serial,
+            "NOID_EXEC_ab12",
+            "NOID_EXEC_ab12_END",
+            "NOID_EXEC_ab12_EXIT",
+        )
+        .expect("should parse with ANSI-prefixed markers");
+        assert_eq!(parsed.0, "output line");
+        assert_eq!(parsed.1, Some(0));
+    }
+
+    #[test]
+    fn strip_ansi_removes_csi_sequences() {
+        assert_eq!(super::strip_ansi("\x1b[?2004hfoo\x1b[0m"), "foo");
+        assert_eq!(super::strip_ansi("no escapes"), "no escapes");
+        assert_eq!(super::strip_ansi("\x1b[32mgreen\x1b[0m"), "green");
+    }
+
+    #[test]
+    fn strip_ansi_handles_incomplete_sequences() {
+        // Incomplete CSI at EOF
+        assert_eq!(super::strip_ansi("text\x1b["), "text");
+        // Bare ESC at EOF
+        assert_eq!(super::strip_ansi("text\x1b"), "text");
+        // Multiple consecutive escapes
+        assert_eq!(
+            super::strip_ansi("\x1b[0m\x1b[1m\x1b[32mtext\x1b[0m"),
+            "text"
+        );
     }
 
     #[test]

@@ -29,7 +29,7 @@ struct SetupResponse {
     guest_mac: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct OkResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,6 +276,21 @@ fn ensure_iptables() -> Result<()> {
         ],
     )?;
 
+    // MSS clamping: adjust TCP MSS to match path MTU.
+    // Prevents TLS handshake hangs when upstream network has lower MTU.
+    ensure(
+        &[
+            "-t", "mangle", "-C", "FORWARD", "-p", "tcp",
+            "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS",
+            "--clamp-mss-to-pmtu",
+        ],
+        &[
+            "-t", "mangle", "-A", "FORWARD", "-p", "tcp",
+            "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS",
+            "--clamp-mss-to-pmtu",
+        ],
+    )?;
+
     eprintln!("iptables: NAT 172.16.0.0/16 via {default_if}");
     Ok(())
 }
@@ -347,4 +362,49 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handle_request_invalid_json() {
+        let resp = handle_request("not json at all");
+        let parsed: OkResponse = serde_json::from_str(&resp).expect("response should be JSON");
+        assert!(!parsed.ok);
+        assert!(parsed.error.unwrap().contains("invalid request"));
+    }
+
+    #[test]
+    fn handle_request_unknown_op() {
+        let resp = handle_request(r#"{"op": "explode"}"#);
+        let parsed: OkResponse = serde_json::from_str(&resp).expect("response should be JSON");
+        assert!(!parsed.ok);
+        assert!(parsed.error.unwrap().contains("unknown op: explode"));
+    }
+
+    #[test]
+    fn handle_request_setup_missing_index() {
+        let resp = handle_request(r#"{"op": "setup"}"#);
+        let parsed: OkResponse = serde_json::from_str(&resp).expect("response should be JSON");
+        assert!(!parsed.ok);
+        assert!(parsed.error.unwrap().contains("index"));
+    }
+
+    #[test]
+    fn handle_request_teardown_missing_tap_name() {
+        let resp = handle_request(r#"{"op": "teardown"}"#);
+        let parsed: OkResponse = serde_json::from_str(&resp).expect("response should be JSON");
+        assert!(!parsed.ok);
+        assert!(parsed.error.unwrap().contains("tap_name"));
+    }
+
+    #[test]
+    fn handle_request_teardown_rejects_non_noid_tap() {
+        let resp = handle_request(r#"{"op": "teardown", "tap_name": "eth0"}"#);
+        let parsed: OkResponse = serde_json::from_str(&resp).expect("response should be JSON");
+        assert!(!parsed.ok);
+        assert!(parsed.error.unwrap().contains("must start with 'noid'"));
+    }
 }

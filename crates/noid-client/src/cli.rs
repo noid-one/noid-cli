@@ -35,7 +35,7 @@ pub enum Command {
         #[arg(long, default_value = "1")]
         cpus: u32,
         /// Memory in MiB
-        #[arg(long, default_value = "256")]
+        #[arg(long, default_value = "2048")]
         mem: u32,
     },
     /// Destroy a microVM
