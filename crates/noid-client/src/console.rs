@@ -31,7 +31,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
         .context("failed to connect to console WebSocket")?;
 
     println!("Attached to '{vm_name}' serial console.");
-    println!("Use ~. to detach (Enter, then ~, then .)");
+    println!("Use ~D to detach (Enter, then ~, then D)");
 
     terminal::enable_raw_mode().context("failed to enable raw terminal mode")?;
 
@@ -40,8 +40,8 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
     // Enable bracketed paste so multi-char pastes arrive as a single Event::Paste
     let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
 
-    // SSH-style ~. escape sequence state
-    let mut after_newline = true; // starts true so ~. works immediately
+    // SSH-style ~D escape sequence state
+    let mut after_newline = true; // starts true so ~D works immediately
     let mut tilde_pending = false;
 
     // We can't easily share the WS across threads, so we use a single-threaded
@@ -94,7 +94,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
                         break;
                     }
 
-                    // SSH-style ~. escape: only for unmodified keys (or Shift)
+                    // SSH-style ~D escape: only for unmodified keys (or Shift)
                     let has_ctrl_alt = key
                         .modifiers
                         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
@@ -103,8 +103,8 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
                         if tilde_pending {
                             tilde_pending = false;
                             match key.code {
-                                KeyCode::Char('.') => {
-                                    // ~. = detach
+                                KeyCode::Char('D') | KeyCode::Char('d') => {
+                                    // ~D = detach
                                     break;
                                 }
                                 KeyCode::Char('~') => {

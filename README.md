@@ -131,7 +131,7 @@ noid exec -- cat /etc/os-release
 noid console my-vm
 ```
 
-Press **Ctrl+Q** to detach (the VM keeps running).
+Press **~D** to detach (the VM keeps running).
 
 ### Checkpoint and restore
 
@@ -174,7 +174,7 @@ noid destroy my-vm
 | `noid list` | List all VMs |
 | `noid info [name]` | Show VM details |
 | `noid exec [--name NAME] -- <command...>` | Run a command inside a VM |
-| `noid console [name]` | Interactive serial console (Ctrl+Q to detach) |
+| `noid console [name]` | Interactive serial console (~D to detach) |
 | `noid checkpoint [--name NAME] [--label TEXT]` | Snapshot a running VM |
 | `noid checkpoints [name]` | List checkpoints |
 | `noid restore [--name NAME] <id> [--as NEW]` | Restore from checkpoint |
