@@ -339,6 +339,7 @@ systemctl mask dpkg-db-backup.timer
 systemctl mask console-setup.service
 systemctl mask systemd-update-utmp.service
 systemctl mask systemd-update-utmp-runlevel.service
+systemctl mask systemd-journal-flush.service
 
 # Disable bracketed paste mode — its ANSI escapes (\e[?2004h/l) pollute
 # serial.log and can break exec marker parsing.
