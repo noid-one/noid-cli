@@ -242,41 +242,26 @@ fn set_fd_nonblocking(fd: i32) {
     }
 }
 
-/// Returns true if `line` is an exec marker token that should be hidden from console.
+/// Returns true if `line` contains an exec marker that should be hidden from console.
 ///
-/// After stripping ANSI escapes and trimming whitespace, matches exactly:
-/// - `NOID_EXEC_<8 hex>` (start marker)
-/// - `NOID_EXEC_<8 hex>_EXIT<digits>` (exit code marker)
-/// - `NOID_EXEC_<8 hex>_END` (end marker)
+/// After stripping ANSI escapes, drops any line containing `NOID_EXEC_<8+ hex>`.
+/// This catches bare marker tokens, shell command echoes that reference markers,
+/// and wrapped fragments of long echo lines — all of which are exec scaffolding.
 fn is_exec_marker_line(line: &[u8]) -> bool {
     let as_str = String::from_utf8_lossy(line);
     let cleaned = noid_core::exec::strip_ansi(&as_str);
-    let trimmed = cleaned.trim();
+    let prefix = noid_core::exec::EXEC_MARKER_PREFIX;
 
-    let rest = match trimmed.strip_prefix(noid_core::exec::EXEC_MARKER_PREFIX) {
-        Some(r) => r,
-        None => return false,
-    };
-
-    // Need at least 8 hex chars after the prefix
-    if rest.len() < 8 || !rest[..8].chars().all(|c| c.is_ascii_hexdigit()) {
-        return false;
-    }
-    let after_id = &rest[8..];
-
-    // Exact: just the ID (start marker)
-    if after_id.is_empty() {
-        return true;
-    }
-    // _END
-    if after_id == "_END" {
-        return true;
-    }
-    // _EXIT followed by one or more digits (max 4 for exit codes 0-255)
-    if let Some(digits) = after_id.strip_prefix("_EXIT") {
-        return !digits.is_empty()
-            && digits.len() <= 4
-            && digits.chars().all(|c| c.is_ascii_digit());
+    // Scan for any occurrence of NOID_EXEC_ followed by 8+ hex chars
+    let mut search = cleaned.as_str();
+    while let Some(pos) = search.find(prefix) {
+        let after = &search[pos + prefix.len()..];
+        let hex_count = after.chars().take(8).filter(|c| c.is_ascii_hexdigit()).count();
+        if hex_count >= 8 {
+            return true;
+        }
+        // Advance past this occurrence
+        search = &search[pos + prefix.len()..];
     }
 
     false
@@ -326,13 +311,23 @@ mod tests {
     }
 
     #[test]
-    fn command_echo_passes_through() {
+    fn command_echo_short_id_passes_through() {
+        // Only 4 hex chars — not a valid marker ID
         assert!(!is_exec_marker_line(b"echo 'NOID_EXEC_abcd'; ls\r\n"));
     }
 
     #[test]
-    fn embedded_marker_in_output_passes_through() {
-        assert!(!is_exec_marker_line(
+    fn command_echo_with_full_id_filtered() {
+        // Shell echo of the wrapped exec command — contains full marker references
+        assert!(is_exec_marker_line(
+            b"echo 'NOID_EXEC_abcd1234'; curl http://example.com; echo 'NOID_EXEC_abcd1234_EXIT'$?\r\n"
+        ));
+    }
+
+    #[test]
+    fn embedded_marker_in_output_filtered() {
+        // Any line containing NOID_EXEC_ + 8 hex is exec scaffolding
+        assert!(is_exec_marker_line(
             b"user printed NOID_EXEC_abcd1234 in output\r\n"
         ));
     }
@@ -354,22 +349,29 @@ mod tests {
     }
 
     #[test]
-    fn marker_exit_no_digits_rejected() {
-        assert!(!is_exec_marker_line(b"NOID_EXEC_abcd1234_EXIT\r\n"));
+    fn marker_exit_no_digits_still_filtered() {
+        // Contains NOID_EXEC_ + 8 hex chars — filtered by substring match
+        assert!(is_exec_marker_line(b"NOID_EXEC_abcd1234_EXIT\r\n"));
     }
 
     #[test]
-    fn marker_with_trailing_text_rejected() {
-        assert!(!is_exec_marker_line(
+    fn marker_with_trailing_text_still_filtered() {
+        // Substring match — 8 hex chars present after prefix
+        assert!(is_exec_marker_line(
             b"NOID_EXEC_abcd1234_extra_stuff\r\n"
         ));
     }
 
     #[test]
-    fn marker_exit_excessive_digits_rejected() {
-        // Protect against DoS via extremely long exit code sequences
-        assert!(!is_exec_marker_line(
-            b"NOID_EXEC_abcd1234_EXIT99999\r\n"
+    fn wrapped_echo_fragment_with_marker_filtered() {
+        // Second half of a wrapped command echo line
+        assert!(is_exec_marker_line(
+            b"T'$?; echo 'NOID_EXEC_888aaac3_END'\r\n"
         ));
+    }
+
+    #[test]
+    fn plain_text_no_prefix_passes_through() {
+        assert!(!is_exec_marker_line(b"downloading packages...\r\n"));
     }
 }
