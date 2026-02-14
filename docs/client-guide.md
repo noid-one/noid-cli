@@ -62,7 +62,7 @@ noid create my-vm
 VM 'my-vm' created (state: running)
 ```
 
-The VM boots with default resources (1 vCPU, 128 MiB RAM). Override with flags:
+The VM boots with default resources (1 vCPU, 256 MiB RAM). Override with flags:
 
 ```bash
 noid create beefy-vm --cpus 4 --mem 512
@@ -80,7 +80,7 @@ noid list
 +----------+---------+------+-----------+---------------------+
 | name     | state   | cpus | mem (MiB) | created             |
 +----------+---------+------+-----------+---------------------+
-| my-vm    | running | 1    | 128       | 2026-02-12 10:30:00 |
+| my-vm    | running | 1    | 256       | 2026-02-12 10:30:00 |
 | beefy-vm | running | 4    | 512       | 2026-02-12 10:31:00 |
 +----------+---------+------+-----------+---------------------+
 ```

@@ -62,7 +62,7 @@ impl Db {
                 kernel TEXT NOT NULL,
                 rootfs TEXT NOT NULL,
                 cpus INTEGER NOT NULL DEFAULT 1,
-                mem_mib INTEGER NOT NULL DEFAULT 128,
+                mem_mib INTEGER NOT NULL DEFAULT 256,
                 state TEXT NOT NULL DEFAULT 'running',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
