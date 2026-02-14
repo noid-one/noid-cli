@@ -121,6 +121,42 @@ noid exec --name my-vm -- echo "hello world"
 noid exec --name my-vm -- sh -c "ls -la | head -5"
 ```
 
+### Environment variables
+
+Pass environment variables scoped to a single command with `-e` / `--env`:
+
+```bash
+noid exec -e GREETING=hello -- sh -c 'echo $GREETING'
+```
+
+```
+hello
+```
+
+Each `-e` flag sets one variable. Use multiple flags for multiple variables:
+
+```bash
+noid exec -e DB_HOST=localhost -e DB_PORT=5432 -- psql
+```
+
+Variables only exist for the lifetime of that command -- they are not exported into the VM's shell environment and don't persist across exec calls:
+
+```bash
+noid exec -e SECRET=hunter2 -- sh -c 'echo $SECRET'   # prints: hunter2
+noid exec -- sh -c 'echo $SECRET'                      # prints: (empty)
+```
+
+This is strictly safer than running `export` inside a console session: the value never touches shell history, never leaks to other processes, and has minimal blast radius.
+
+Values are shell-escaped automatically, so special characters in values work safely:
+
+```bash
+noid exec -e MSG='hello world' -- sh -c 'echo $MSG'
+noid exec -e API_KEY='sk-ant-abc123+/==' -- my-app
+```
+
+Variable names must match `[A-Za-z_][A-Za-z0-9_]*` (standard POSIX). Invalid names are rejected client-side before reaching the server.
+
 ### Exit codes
 
 `noid exec` forwards the exit code from the command inside the VM:
@@ -392,6 +428,17 @@ noid exec --name "preview-${BRANCH}" -- sh -c "cd /app && git pull && ./start.sh
 noid destroy "preview-${BRANCH}"
 ```
 
+### Injecting secrets
+
+Use `-e` to pass credentials without shell history exposure:
+
+```bash
+noid exec -e ANTHROPIC_API_KEY=sk-ant-... -- claude
+noid exec -e AWS_ACCESS_KEY_ID=AKIA... -e AWS_SECRET_ACCESS_KEY=... -- aws s3 ls
+```
+
+The variable exists only for the duration of that command. Compare this to the unsafe alternative of running `export SECRET=...` inside a console session, where the value persists in the shell and may appear in history.
+
 ## Command reference
 
 | Command | Description |
@@ -403,7 +450,7 @@ noid destroy "preview-${BRANCH}"
 | `noid create <name> [--cpus N] [--mem MiB]` | Create and boot a VM |
 | `noid list` | List all VMs |
 | `noid info [name]` | Show VM details |
-| `noid exec [--name NAME] -- <command...>` | Run a command inside a VM |
+| `noid exec [--name NAME] [-e KEY=VAL]... -- <command...>` | Run a command inside a VM |
 | `noid console [name]` | Attach interactive serial console (~D to detach) |
 | `noid checkpoint [--name NAME] [--label TEXT]` | Snapshot a running VM (memory + disk + CPU) |
 | `noid checkpoints [name]` | List snapshots for a VM |

@@ -10,7 +10,10 @@ pub const EXEC_MARKER_PREFIX: &str = "NOID_EXEC_";
 
 /// Escape a string for safe use in a shell command.
 /// Uses single quotes and escapes any single quotes in the string.
+/// Panics if the string contains NUL bytes (invalid in shell contexts).
 pub fn shell_escape(s: &str) -> String {
+    assert!(!s.contains('\0'), "shell_escape: input contains NUL byte");
+
     if s.is_empty() {
         return "''".to_string();
     }
@@ -24,6 +27,63 @@ pub fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Validate that a string is a legal environment variable name.
+/// Accepts `[A-Za-z_][A-Za-z0-9_]*`.
+pub fn validate_env_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Parse `KEY=VALUE` pairs, splitting on the first `=`.
+/// Returns (name, value) slices. Validates names.
+pub fn parse_env_vars(env: &[String]) -> Result<Vec<(&str, &str)>> {
+    let mut result = Vec::with_capacity(env.len());
+    for entry in env {
+        let (name, value) = entry
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("invalid env var (missing '='): {entry}"))?;
+        if !validate_env_name(name) {
+            anyhow::bail!("invalid env var name: {name}");
+        }
+        result.push((name, value));
+    }
+    Ok(result)
+}
+
+/// Build an inline env prefix string like `FOO='bar' DB='x' ` for prepending
+/// to a shell command. Values are escaped with `shell_escape()`.
+/// Returns empty string if env is empty.
+pub fn build_env_prefix(env: &[String]) -> Result<String> {
+    const MAX_ENV_VARS: usize = 64;
+    const MAX_VALUE_LEN: usize = 32 * 1024; // 32 KiB per value
+
+    if env.is_empty() {
+        return Ok(String::new());
+    }
+    if env.len() > MAX_ENV_VARS {
+        anyhow::bail!("too many env vars ({}, max {MAX_ENV_VARS})", env.len());
+    }
+    let parsed = parse_env_vars(env)?;
+    let mut prefix = String::new();
+    for (name, value) in parsed {
+        if value.len() > MAX_VALUE_LEN {
+            anyhow::bail!("env var value too long for {name} ({} bytes, max {MAX_VALUE_LEN})", value.len());
+        }
+        prefix.push_str(name);
+        prefix.push('=');
+        prefix.push_str(&shell_escape(value));
+        prefix.push(' ');
+    }
+    Ok(prefix)
+}
+
 /// Execute a command inside a VM by writing to the serial console and
 /// reading the output from serial.log.
 ///
@@ -32,6 +92,7 @@ pub fn exec_via_serial(
     vm_dir: &Path,
     command: &[String],
     timeout_secs: u64,
+    env: &[String],
 ) -> Result<(String, Option<i32>, bool, bool)> {
     let serial_path = vm::serial_log_path(vm_dir);
     if !serial_path.exists() {
@@ -44,6 +105,8 @@ pub fn exec_via_serial(
     let marker_end = format!("{marker_start}_END");
     let marker_exit = format!("{marker_start}_EXIT");
 
+    let env_prefix = build_env_prefix(env)?;
+
     let escaped_cmd = command
         .iter()
         .map(|arg| shell_escape(arg))
@@ -53,7 +116,7 @@ pub fn exec_via_serial(
     // Wrap command: echo start marker, run command, capture exit code, echo exit + end markers.
     // Prepend a newline to clear partial prompts on the serial tty.
     let wrapped = format!(
-        "\necho '{marker_start}'; {escaped_cmd}; echo '{marker_exit}'$?; echo '{marker_end}'\n"
+        "\necho '{marker_start}'; {env_prefix}{escaped_cmd}; echo '{marker_exit}'$?; echo '{marker_end}'\n"
     );
     vm::write_to_serial(vm_dir, wrapped.as_bytes())?;
 
@@ -296,5 +359,120 @@ mod tests {
         .expect("should parse");
         assert_eq!(parsed.0, "hi");
         assert_eq!(parsed.1, Some(7));
+    }
+
+    #[test]
+    fn validate_env_name_valid() {
+        assert!(super::validate_env_name("FOO"));
+        assert!(super::validate_env_name("_BAR"));
+        assert!(super::validate_env_name("DB_HOST_1"));
+        assert!(super::validate_env_name("a"));
+        assert!(super::validate_env_name("_"));
+    }
+
+    #[test]
+    fn validate_env_name_invalid() {
+        assert!(!super::validate_env_name(""));
+        assert!(!super::validate_env_name("1FOO"));
+        assert!(!super::validate_env_name("FOO;rm"));
+        assert!(!super::validate_env_name("FOO BAR"));
+        assert!(!super::validate_env_name("FOO=BAR"));
+        assert!(!super::validate_env_name("a-b"));
+        assert!(!super::validate_env_name("$(cmd)"));
+    }
+
+    #[test]
+    fn parse_env_vars_valid() {
+        let env = vec!["FOO=bar".into(), "DB_HOST=localhost".into()];
+        let parsed = super::parse_env_vars(&env).unwrap();
+        assert_eq!(parsed, vec![("FOO", "bar"), ("DB_HOST", "localhost")]);
+    }
+
+    #[test]
+    fn parse_env_vars_value_with_equals() {
+        let env = vec!["KEY=a=b=c".into()];
+        let parsed = super::parse_env_vars(&env).unwrap();
+        assert_eq!(parsed, vec![("KEY", "a=b=c")]);
+    }
+
+    #[test]
+    fn parse_env_vars_empty_value() {
+        let env = vec!["KEY=".into()];
+        let parsed = super::parse_env_vars(&env).unwrap();
+        assert_eq!(parsed, vec![("KEY", "")]);
+    }
+
+    #[test]
+    fn parse_env_vars_missing_equals() {
+        let env = vec!["NOEQUALS".into()];
+        assert!(super::parse_env_vars(&env).is_err());
+    }
+
+    #[test]
+    fn parse_env_vars_invalid_name() {
+        let env = vec!["1BAD=val".into()];
+        assert!(super::parse_env_vars(&env).is_err());
+    }
+
+    #[test]
+    fn build_env_prefix_empty() {
+        let prefix = super::build_env_prefix(&[]).unwrap();
+        assert_eq!(prefix, "");
+    }
+
+    #[test]
+    fn build_env_prefix_single() {
+        let env = vec!["FOO=bar".into()];
+        let prefix = super::build_env_prefix(&env).unwrap();
+        assert_eq!(prefix, "FOO=bar ");
+    }
+
+    #[test]
+    fn build_env_prefix_multiple() {
+        let env = vec!["A=1".into(), "B=2".into()];
+        let prefix = super::build_env_prefix(&env).unwrap();
+        assert_eq!(prefix, "A=1 B=2 ");
+    }
+
+    #[test]
+    fn build_env_prefix_escapes_values() {
+        let env = vec!["KEY=hello world".into()];
+        let prefix = super::build_env_prefix(&env).unwrap();
+        assert_eq!(prefix, "KEY='hello world' ");
+    }
+
+    #[test]
+    fn build_env_prefix_injection_attempt() {
+        let env = vec!["KEY=$(rm -rf /)".into()];
+        let prefix = super::build_env_prefix(&env).unwrap();
+        // Value should be single-quoted, preventing command substitution
+        assert_eq!(prefix, "KEY='$(rm -rf /)' ");
+    }
+
+    #[test]
+    fn build_env_prefix_rejects_bad_name() {
+        let env = vec!["FOO;rm=val".into()];
+        assert!(super::build_env_prefix(&env).is_err());
+    }
+
+    #[test]
+    fn build_env_prefix_rejects_too_many() {
+        let env: Vec<String> = (0..65).map(|i| format!("V{i}=x")).collect();
+        let err = super::build_env_prefix(&env).unwrap_err();
+        assert!(err.to_string().contains("too many env vars"));
+    }
+
+    #[test]
+    fn build_env_prefix_rejects_huge_value() {
+        let big = "x".repeat(33 * 1024);
+        let env = vec![format!("KEY={big}")];
+        let err = super::build_env_prefix(&env).unwrap_err();
+        assert!(err.to_string().contains("too long"));
+    }
+
+    #[test]
+    #[should_panic(expected = "NUL byte")]
+    fn shell_escape_rejects_nul() {
+        super::shell_escape("foo\0bar");
     }
 }

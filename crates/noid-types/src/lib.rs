@@ -41,6 +41,8 @@ pub struct ExecRequest {
     pub command: Vec<String>,
     #[serde(default)]
     pub tty: bool,
+    #[serde(default)]
+    pub env: Vec<String>,
 }
 
 // --- REST response types ---
@@ -152,10 +154,31 @@ mod tests {
         let req = ExecRequest {
             command: vec!["ls".into(), "-la".into()],
             tty: false,
+            env: vec![],
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["command"], serde_json::json!(["ls", "-la"]));
         assert_eq!(json["tty"], false);
+    }
+
+    #[test]
+    fn exec_request_env_round_trip() {
+        let req = ExecRequest {
+            command: vec!["sh".into(), "-c".into(), "echo $FOO".into()],
+            tty: false,
+            env: vec!["FOO=bar".into(), "DB_HOST=localhost".into()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: ExecRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.env, vec!["FOO=bar", "DB_HOST=localhost"]);
+    }
+
+    #[test]
+    fn exec_request_env_backward_compat() {
+        // Old clients omitting env field should deserialize to empty vec
+        let json = r#"{"command":["ls"],"tty":false}"#;
+        let req: ExecRequest = serde_json::from_str(json).unwrap();
+        assert!(req.env.is_empty());
     }
 
     #[test]

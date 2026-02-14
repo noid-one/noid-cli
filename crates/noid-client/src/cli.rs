@@ -55,6 +55,9 @@ pub enum Command {
         /// VM name (optional if .noid file exists)
         #[arg(long)]
         name: Option<String>,
+        /// Set environment variable (KEY=VALUE)
+        #[arg(short = 'e', long = "env")]
+        env: Vec<String>,
         /// Command to run
         #[arg(last = true)]
         command: Vec<String>,

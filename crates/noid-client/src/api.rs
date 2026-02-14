@@ -108,10 +108,11 @@ impl ApiClient {
         Ok(())
     }
 
-    pub fn exec_vm(&self, name: &str, command: &[String]) -> Result<ExecResponse> {
+    pub fn exec_vm(&self, name: &str, command: &[String], env: &[String]) -> Result<ExecResponse> {
         let req = ExecRequest {
             command: command.to_vec(),
             tty: false,
+            env: env.to_vec(),
         };
         let resp = self.post(&format!("/v1/vms/{name}/exec"), &req)?;
         resp.into_json().context("failed to parse exec response")

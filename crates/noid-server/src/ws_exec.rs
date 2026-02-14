@@ -52,7 +52,7 @@ pub fn handle_exec_ws<S: Read + Write>(
     // A true streaming implementation would require refactoring exec_via_serial.
     match state
         .backend
-        .exec_full(&user.id, vm_name, &exec_req.command)
+        .exec_full(&user.id, vm_name, &exec_req.command, &exec_req.env)
     {
         Ok((stdout, result)) => {
             // Send output as binary frame with CHANNEL_STDOUT prefix

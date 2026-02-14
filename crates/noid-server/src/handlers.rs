@@ -167,7 +167,10 @@ pub fn exec_vm(req: AuthenticatedRequest, state: &Arc<ServerState>, name: &str) 
         return ResponseBuilder::error(400, "command cannot be empty");
     }
 
-    match state.backend.exec_full(&req.user.id, name, &body.command) {
+    match state
+        .backend
+        .exec_full(&req.user.id, name, &body.command, &body.env)
+    {
         Ok((stdout, result)) => ResponseBuilder::json(
             200,
             &ExecResponse {

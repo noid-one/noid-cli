@@ -6,7 +6,7 @@ use tungstenite::protocol::Message;
 
 use crate::api::ApiClient;
 
-pub fn exec_ws(api: &ApiClient, vm_name: &str, command: &[String]) -> Result<i32> {
+pub fn exec_ws(api: &ApiClient, vm_name: &str, command: &[String], env: &[String]) -> Result<i32> {
     let mut ws = api
         .ws_connect(&format!("/v1/vms/{vm_name}/exec"), Duration::from_secs(10))
         .context("failed to connect to exec WebSocket")?;
@@ -15,6 +15,7 @@ pub fn exec_ws(api: &ApiClient, vm_name: &str, command: &[String]) -> Result<i32
     let exec_req = ExecRequest {
         command: command.to_vec(),
         tty: false,
+        env: env.to_vec(),
     };
     ws.send(Message::Text(serde_json::to_string(&exec_req)?))?;
 

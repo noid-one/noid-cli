@@ -52,12 +52,29 @@ fn main() -> Result<()> {
             cmd_info(&name)?;
             0
         }
-        Command::Exec { name, command } => {
+        Command::Exec { name, env, command } => {
             let name = config::resolve_vm_name(name.as_deref())?;
             if command.is_empty() {
                 anyhow::bail!("no command specified");
             }
-            cmd_exec(&name, &command)?
+            for e in &env {
+                let name = match e.split_once('=') {
+                    Some((n, _)) => n,
+                    None => anyhow::bail!("invalid env var (expected KEY=VALUE): {e}"),
+                };
+                if name.is_empty()
+                    || !name.chars().enumerate().all(|(i, c)| {
+                        if i == 0 {
+                            c.is_ascii_alphabetic() || c == '_'
+                        } else {
+                            c.is_ascii_alphanumeric() || c == '_'
+                        }
+                    })
+                {
+                    anyhow::bail!("invalid env var name: {name}");
+                }
+            }
+            cmd_exec(&name, &command, &env)?
         }
         Command::Console { name } => {
             let name = config::resolve_vm_name(name.as_deref())?;
@@ -196,15 +213,15 @@ fn cmd_info(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_exec(name: &str, command: &[String]) -> Result<i32> {
+fn cmd_exec(name: &str, command: &[String], env: &[String]) -> Result<i32> {
     let api = api_client()?;
 
     // Try WebSocket first, fall back to HTTP POST
-    match exec::exec_ws(&api, name, command) {
+    match exec::exec_ws(&api, name, command, env) {
         Ok(code) => Ok(code),
         Err(_ws_err) => {
             // Fallback to HTTP POST exec
-            let resp = api.exec_vm(name, command)?;
+            let resp = api.exec_vm(name, command, env)?;
             if !resp.stdout.is_empty() {
                 print!("{}", resp.stdout);
             }

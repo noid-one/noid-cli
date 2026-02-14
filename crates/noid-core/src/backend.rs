@@ -27,6 +27,7 @@ pub trait VmBackend: Send + Sync {
         user_id: &str,
         name: &str,
         command: &[String],
+        env: &[String],
     ) -> Result<(String, ExecResult)>;
     fn checkpoint(&self, user_id: &str, name: &str, label: Option<&str>) -> Result<CheckpointInfo>;
     fn list_checkpoints(&self, user_id: &str, name: &str) -> Result<Vec<CheckpointInfo>>;
@@ -313,7 +314,7 @@ impl FirecrackerBackend {
         );
         let cmd = vec!["sh".to_string(), "-c".to_string(), cmd_str];
         let timeout = self.exec_timeout_secs.max(15);
-        let (_, exit_code, timed_out, _) = exec::exec_via_serial(vm_dir, &cmd, timeout)?;
+        let (_, exit_code, timed_out, _) = exec::exec_via_serial(vm_dir, &cmd, timeout, &[])?;
         if timed_out {
             bail!("network reconfiguration timed out");
         }
@@ -409,6 +410,7 @@ impl VmBackend for FirecrackerBackend {
         user_id: &str,
         name: &str,
         command: &[String],
+        env: &[String],
     ) -> Result<(String, ExecResult)> {
         self.db()
             .get_vm(user_id, name)?
@@ -419,7 +421,7 @@ impl VmBackend for FirecrackerBackend {
 
         let dir = storage::vm_dir(user_id, name);
         let (stdout, exit_code, timed_out, truncated) =
-            exec::exec_via_serial(&dir, command, self.exec_timeout_secs)?;
+            exec::exec_via_serial(&dir, command, self.exec_timeout_secs, env)?;
 
         Ok((
             stdout,
