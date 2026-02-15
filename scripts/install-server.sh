@@ -185,9 +185,12 @@ sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" bash -c "cd ${NOID_REPO} && 
 
 echo "    Installing binaries"
 # Stop running daemons so we can overwrite their binaries
-for proc in noid-server noid-netd; do
-    if pkill -x "$proc" 2>/dev/null; then
-        echo "    stopped running ${proc}"
+for svc in noid-server noid-netd; do
+    if systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
+        systemctl stop "${svc}.service"
+        echo "    stopped ${svc}.service"
+    elif pkill -x "$svc" 2>/dev/null; then
+        echo "    stopped running ${svc}"
         sleep 0.2
     fi
 done
@@ -236,6 +239,13 @@ systemctl daemon-reload
 systemctl enable noid-netd > /dev/null 2>&1
 systemctl restart noid-netd
 echo "    noid-netd: running"
+
+# noid-server systemd service
+sed "s|/home/firecracker/.local/bin|${USER_BIN_DIR}|g; s|/home/firecracker|${NOID_DIR}|g" \
+    scripts/noid-server.service > /etc/systemd/system/noid-server.service
+systemctl daemon-reload
+systemctl enable noid-server > /dev/null 2>&1
+echo "    noid-server: service installed"
 
 # --- Step 7: Rootfs ---
 
@@ -521,6 +531,7 @@ fi
 # --- Step 10: Server config ---
 
 step "Writing server.toml (for production use)"
+# In-repo config (development convenience)
 SERVER_TOML="${NOID_REPO}/server.toml"
 cat > "$SERVER_TOML" << EOF
 listen = "0.0.0.0:7654"
@@ -530,7 +541,19 @@ EOF
 chown firecracker:firecracker "$SERVER_TOML"
 echo "    ${SERVER_TOML}"
 
-# --- Done ---
+# System config (for systemd service)
+mkdir -p /etc/noid
+cp "$SERVER_TOML" /etc/noid/server.toml
+chmod 644 /etc/noid/server.toml
+echo "    /etc/noid/server.toml"
+
+# --- Done: Start services ---
+
+step "Starting services"
+systemctl restart noid-netd
+systemctl restart noid-server
+echo "    noid-netd:    $(systemctl is-active noid-netd)"
+echo "    noid-server:  $(systemctl is-active noid-server)"
 
 echo ""
 echo -e "${GREEN}=== noid installed ===${NC}"
@@ -539,13 +562,17 @@ echo "  Binaries:     ${USER_BIN_DIR}/noid, noid-server, noid-netd"
 echo "  Firecracker:  ${BIN_DIR}/firecracker (v${FC_VERSION})"
 echo "  Kernel:       ${KERNEL_PATH}"
 echo "  Rootfs:       ${ROOTFS_PATH}"
-echo "  Config:       ${SERVER_TOML}"
+echo "  Config:       ${SERVER_TOML}, /etc/noid/server.toml"
 echo "  Networking:   172.16.0.0/16 NAT via ${DEFAULT_IF}"
 echo "  noid-netd:    $(systemctl is-active noid-netd)"
+echo "  noid-server:  $(systemctl is-active noid-server)"
+echo ""
+echo "Services (survive reboot):"
+echo "  systemctl status noid-server noid-netd"
+echo "  journalctl -u noid-server -f"
 echo ""
 echo "Next steps:"
-echo "  1. Start the server:  noid-server serve --config server.toml"
-echo "  2. Add a user:        noid-server add-user alice"
-echo "  3. Configure client:  noid auth setup --url http://localhost:7654 --token <token>"
-echo "  4. Create a VM:       noid create myvm"
-echo "  5. Optional: Install Claude Code in a VM, then checkpoint to update the golden snapshot"
+echo "  1. Add a user:        noid-server add-user alice"
+echo "  2. Configure client:  noid auth setup --url http://localhost:7654 --token <token>"
+echo "  3. Create a VM:       noid create myvm"
+echo "  4. Optional: Install Claude Code in a VM, then checkpoint to update the golden snapshot"

@@ -40,6 +40,7 @@ noid/
   scripts/
     install-server.sh              # server provisioning (deps, FC, networking, rootfs)
     noid-netd.service            # systemd unit for noid-netd
+    noid-server.service          # systemd unit for noid-server
 ```
 
 ### Dependency Graph

@@ -1,0 +1,25 @@
+[Unit]
+Description=noid API server
+After=network-online.target noid-netd.service
+Wants=network-online.target noid-netd.service
+
+[Service]
+Type=simple
+ExecStart=/home/firecracker/.local/bin/noid-server serve --config /etc/noid/server.toml
+User=firecracker
+Group=firecracker
+WorkingDirectory=/home/firecracker
+Environment=HOME=/home/firecracker
+Restart=on-failure
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=no
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadWritePaths=/home/firecracker/.noid /run/noid
+DeviceAllow=/dev/kvm rw
+
+[Install]
+WantedBy=multi-user.target

@@ -7,6 +7,8 @@ Before=noid-server.service
 [Service]
 ExecStart=/home/firecracker/.local/bin/noid-netd
 User=root
+Restart=on-failure
+RestartSec=5
 ProtectSystem=strict
 PrivateTmp=yes
 NoNewPrivileges=yes
