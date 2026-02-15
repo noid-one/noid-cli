@@ -360,7 +360,14 @@ impl VmBackend for FirecrackerBackend {
             };
 
         if use_golden {
-            self.create_from_golden(user_id, name, cpus, mem_mib)
+            match self.create_from_golden(user_id, name, cpus, mem_mib) {
+                Ok(info) => Ok(info),
+                Err(e) => {
+                    eprintln!("warning: golden snapshot failed ({e:#}), falling back to cold boot");
+                    let _ = storage::delete_subvolume(user_id, name);
+                    self.create_cold_boot(user_id, name, cpus, mem_mib)
+                }
+            }
         } else {
             self.create_cold_boot(user_id, name, cpus, mem_mib)
         }

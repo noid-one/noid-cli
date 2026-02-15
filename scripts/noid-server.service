@@ -20,6 +20,7 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 ReadWritePaths=/home/firecracker/.noid /run/noid
 DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/net/tun rw
 
 [Install]
 WantedBy=multi-user.target
