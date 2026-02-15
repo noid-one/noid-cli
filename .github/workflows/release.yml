@@ -61,6 +61,9 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      # TODO: Remove this alias once all users have updated past v0.2.27
+      - name: Backwards-compat alias for pre-v0.2.27 clients
+        run: cp artifacts/noid-linux-x86_64 artifacts/noid
       - name: Validate artifacts
         run: |
           ls -la artifacts/
@@ -70,7 +73,7 @@ jobs:
             exit 1
           fi
           # Verify expected files exist
-          for file in noid-linux-x86_64 noid-darwin-x86_64 noid-darwin-aarch64 noid-server noid-netd noid-local; do
+          for file in noid noid-linux-x86_64 noid-darwin-x86_64 noid-darwin-aarch64 noid-server noid-netd noid-local; do
             if [ ! -f "artifacts/$file" ]; then
               echo "ERROR: Missing expected artifact: $file"
               exit 1
