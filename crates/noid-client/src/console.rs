@@ -31,7 +31,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
         .context("failed to connect to console WebSocket")?;
 
     println!("Attached to '{vm_name}' serial console.");
-    println!("Press Ctrl+] to detach (or type 'exit')");
+    println!("Type 'exit' to detach.");
 
     terminal::enable_raw_mode().context("failed to enable raw terminal mode")?;
 
@@ -115,13 +115,6 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
                     }
                 }
                 Event::Key(key) => {
-                    // Ctrl+] to detach
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char(']')
-                    {
-                        break;
-                    }
-
                     // Normal key handling
                     if let Some(bytes) = key_to_bytes(&key) {
                         // Track line buffer for "exit" detection
