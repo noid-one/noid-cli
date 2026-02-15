@@ -31,7 +31,7 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
         .context("failed to connect to console WebSocket")?;
 
     println!("Attached to '{vm_name}' serial console.");
-    println!("Press Ctrl+\\ to detach (or type 'exit')");
+    println!("Press Ctrl+] to detach (or type 'exit')");
 
     terminal::enable_raw_mode().context("failed to enable raw terminal mode")?;
 
@@ -39,10 +39,6 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
 
     // Enable bracketed paste so multi-char pastes arrive as a single Event::Paste
     let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
-
-    // SSH-style ~D escape sequence state
-    let mut after_newline = true; // starts true so ~D works immediately
-    let mut tilde_pending = false;
 
     // Line buffer for "exit" detection
     let mut line_buffer = String::new();
@@ -116,52 +112,14 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
                                 line_buffer = last.to_string();
                             }
                         }
-                        after_newline = translated.ends_with('\r');
-                        tilde_pending = false;
                     }
                 }
                 Event::Key(key) => {
-                    // Ctrl+\ to detach
+                    // Ctrl+] to detach
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('\\')
+                        && key.code == KeyCode::Char(']')
                     {
                         break;
-                    }
-
-                    // SSH-style ~D escape: only for unmodified keys (or Shift)
-                    let has_ctrl_alt = key
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-
-                    if !has_ctrl_alt {
-                        if tilde_pending {
-                            tilde_pending = false;
-                            match key.code {
-                                KeyCode::Char('D') | KeyCode::Char('d') => {
-                                    // ~D = detach
-                                    break;
-                                }
-                                KeyCode::Char('~') => {
-                                    // ~~ = send one literal ~
-                                    if !send_stdin(&mut ws, b"~") {
-                                        break;
-                                    }
-                                    after_newline = false;
-                                    continue;
-                                }
-                                _ => {
-                                    // ~<other> = flush buffered ~ then handle char normally
-                                    if !send_stdin(&mut ws, b"~") {
-                                        break;
-                                    }
-                                    // Fall through to send the current key below
-                                }
-                            }
-                        } else if after_newline && key.code == KeyCode::Char('~') {
-                            // Start of potential escape sequence — buffer the ~
-                            tilde_pending = true;
-                            continue;
-                        }
                     }
 
                     // Normal key handling
@@ -202,9 +160,6 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
                         if !send_stdin(&mut ws, &bytes) {
                             break;
                         }
-                        // Track newline state
-                        after_newline = key.code == KeyCode::Enter;
-                        tilde_pending = false;
                     }
                 }
                 _ => {}

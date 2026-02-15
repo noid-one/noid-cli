@@ -178,7 +178,7 @@ noid console my-vm
 
 This gives you a direct, interactive shell inside the VM. Type commands, see output in real time.
 
-**Press ~D to detach.** The VM keeps running after you disconnect.
+**Press Ctrl+] to detach.** The VM keeps running after you disconnect.
 
 The console uses WebSocket for bidirectional communication. Only one console session per VM at a time.
 
@@ -451,7 +451,7 @@ The variable exists only for the duration of that command. Compare this to the u
 | `noid list` | List all VMs |
 | `noid info [name]` | Show VM details |
 | `noid exec [--name NAME] [-e KEY=VAL]... -- <command...>` | Run a command inside a VM |
-| `noid console [name]` | Attach interactive serial console (~D to detach) |
+| `noid console [name]` | Attach interactive serial console (Ctrl+] to detach) |
 | `noid checkpoint [--name NAME] [--label TEXT]` | Snapshot a running VM (memory + disk + CPU) |
 | `noid checkpoints [name]` | List snapshots for a VM |
 | `noid restore [--name NAME] <id> [--as NEW]` | Restore or clone a VM from a snapshot |

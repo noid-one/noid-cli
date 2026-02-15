@@ -18,7 +18,7 @@ pub fn attach_console(vm_name: &str) -> Result<()> {
         anyhow::bail!("serial.log not found for VM '{vm_name}' — is it running?");
     }
 
-    println!("Attached to '{vm_name}' serial console. Press Ctrl+\\ to detach (or type 'exit').");
+    println!("Attached to '{vm_name}' serial console. Press Ctrl+] to detach (or type 'exit').");
 
     terminal::enable_raw_mode().context("failed to enable raw terminal mode")?;
 
@@ -61,8 +61,8 @@ pub fn attach_console(vm_name: &str) -> Result<()> {
     loop {
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                // Ctrl+\ to detach
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('\\') {
+                // Ctrl+] to detach
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(']') {
                     break;
                 }
 
