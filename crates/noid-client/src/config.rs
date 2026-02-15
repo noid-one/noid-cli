@@ -50,18 +50,38 @@ impl ClientConfig {
     }
 }
 
-/// Read the active VM name from .noid file in CWD.
-pub fn read_active_vm() -> Option<String> {
-    std::fs::read_to_string(".noid")
+/// Read the active VM name from .noid file in the given directory.
+fn read_active_vm_at(dir: &std::path::Path) -> Option<String> {
+    let path = dir.join(".noid");
+    if path.is_dir() {
+        return None;
+    }
+    std::fs::read_to_string(path)
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
+/// Read the active VM name from .noid file in CWD.
+pub fn read_active_vm() -> Option<String> {
+    read_active_vm_at(std::path::Path::new("."))
+}
+
+/// Write the active VM name to .noid file in the given directory.
+fn write_active_vm_at(dir: &std::path::Path, name: &str) -> Result<()> {
+    let path = dir.join(".noid");
+    if path.is_dir() {
+        anyhow::bail!(
+            ".noid is a directory (config dir). Run `noid use` from a project directory, not your home directory."
+        );
+    }
+    std::fs::write(path, format!("{name}\n"))?;
+    Ok(())
+}
+
 /// Write the active VM name to .noid file in CWD.
 pub fn write_active_vm(name: &str) -> Result<()> {
-    std::fs::write(".noid", format!("{name}\n"))?;
-    Ok(())
+    write_active_vm_at(std::path::Path::new("."), name)
 }
 
 /// Resolve VM name: explicit arg > .noid file > error.
@@ -110,5 +130,27 @@ mod tests {
             }),
         };
         assert_eq!(config.server().unwrap().url, "http://localhost");
+    }
+
+    #[test]
+    fn write_active_vm_rejects_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".noid")).unwrap();
+        let err = write_active_vm_at(dir.path(), "test").unwrap_err();
+        assert!(err.to_string().contains("directory"));
+    }
+
+    #[test]
+    fn read_active_vm_returns_none_for_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".noid")).unwrap();
+        assert!(read_active_vm_at(dir.path()).is_none());
+    }
+
+    #[test]
+    fn write_and_read_active_vm_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        write_active_vm_at(dir.path(), "my-vm").unwrap();
+        assert_eq!(read_active_vm_at(dir.path()).unwrap(), "my-vm");
     }
 }
