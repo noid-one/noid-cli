@@ -3,6 +3,8 @@
 # provision-golden.sh — Update the golden snapshot used by `noid create`
 #
 # Mode 1: Promote an existing checkpoint
+#   You need a checkpoint first: noid checkpoint --name my-vm --label before-deploy
+#   then:
 #   sudo bash scripts/provision-golden.sh --from-checkpoint <checkpoint_id>
 #
 # Mode 2: Full provisioning (create VM, install tools, checkpoint, promote)
