@@ -27,19 +27,8 @@ pub fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Validate that a string is a legal environment variable name.
-/// Accepts `[A-Za-z_][A-Za-z0-9_]*`.
-pub fn validate_env_name(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    let mut chars = name.chars();
-    let first = chars.next().unwrap();
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
+// Re-export from noid-types so existing callers keep working.
+pub use noid_types::validate_env_name;
 
 /// Parse `KEY=VALUE` pairs, splitting on the first `=`.
 /// Returns (name, value) slices. Validates names.
@@ -61,8 +50,7 @@ pub fn parse_env_vars(env: &[String]) -> Result<Vec<(&str, &str)>> {
 /// to a shell command. Values are escaped with `shell_escape()`.
 /// Returns empty string if env is empty.
 pub fn build_env_prefix(env: &[String]) -> Result<String> {
-    const MAX_ENV_VARS: usize = 64;
-    const MAX_VALUE_LEN: usize = 32 * 1024; // 32 KiB per value
+    use noid_types::{MAX_ENV_VALUE_LEN, MAX_ENV_VARS};
 
     if env.is_empty() {
         return Ok(String::new());
@@ -73,8 +61,8 @@ pub fn build_env_prefix(env: &[String]) -> Result<String> {
     let parsed = parse_env_vars(env)?;
     let mut prefix = String::new();
     for (name, value) in parsed {
-        if value.len() > MAX_VALUE_LEN {
-            anyhow::bail!("env var value too long for {name} ({} bytes, max {MAX_VALUE_LEN})", value.len());
+        if value.len() > MAX_ENV_VALUE_LEN {
+            anyhow::bail!("env var value too long for {name} ({} bytes, max {MAX_ENV_VALUE_LEN})", value.len());
         }
         prefix.push_str(name);
         prefix.push('=');
@@ -363,6 +351,7 @@ mod tests {
 
     #[test]
     fn validate_env_name_valid() {
+        // Tests the re-export from noid-types
         assert!(super::validate_env_name("FOO"));
         assert!(super::validate_env_name("_BAR"));
         assert!(super::validate_env_name("DB_HOST_1"));

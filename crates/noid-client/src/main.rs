@@ -54,31 +54,21 @@ fn main() -> Result<()> {
         }
         Command::Exec { name, env, command } => {
             let name = config::resolve_vm_name(name.as_deref())?;
+            validate_env_vars(&env)?;
             if command.is_empty() {
-                anyhow::bail!("no command specified");
+                // No command: open interactive console with env vars
+                let api = api_client()?;
+                console::attach_console(&api, &name, &env)?;
+                0
+            } else {
+                cmd_exec(&name, &command, &env)?
             }
-            for e in &env {
-                let name = match e.split_once('=') {
-                    Some((n, _)) => n,
-                    None => anyhow::bail!("invalid env var (expected KEY=VALUE): {e}"),
-                };
-                if name.is_empty()
-                    || !name.chars().enumerate().all(|(i, c)| {
-                        if i == 0 {
-                            c.is_ascii_alphabetic() || c == '_'
-                        } else {
-                            c.is_ascii_alphanumeric() || c == '_'
-                        }
-                    })
-                {
-                    anyhow::bail!("invalid env var name: {name}");
-                }
-            }
-            cmd_exec(&name, &command, &env)?
         }
-        Command::Console { name } => {
+        Command::Console { name, env } => {
             let name = config::resolve_vm_name(name.as_deref())?;
-            cmd_console(&name)?;
+            validate_env_vars(&env)?;
+            let api = api_client()?;
+            console::attach_console(&api, &name, &env)?;
             0
         }
         Command::Checkpoint { name, label } => {
@@ -235,9 +225,8 @@ fn cmd_exec(name: &str, command: &[String], env: &[String]) -> Result<i32> {
     }
 }
 
-fn cmd_console(name: &str) -> Result<()> {
-    let api = api_client()?;
-    console::attach_console(&api, name)
+fn validate_env_vars(env: &[String]) -> Result<()> {
+    noid_types::validate_env_vars(env).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 fn cmd_checkpoint(name: &str, label: Option<&str>) -> Result<()> {

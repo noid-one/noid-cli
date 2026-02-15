@@ -22,7 +22,7 @@ fn send_stdin(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>, data: &[u8]) -> boo
     ok
 }
 
-pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
+pub fn attach_console(api: &ApiClient, vm_name: &str, env: &[String]) -> Result<()> {
     let mut ws = api
         .ws_connect(
             &format!("/v1/vms/{vm_name}/console"),
@@ -39,6 +39,74 @@ pub fn attach_console(api: &ApiClient, vm_name: &str) -> Result<()> {
 
     // Enable bracketed paste so multi-char pastes arrive as a single Event::Paste
     let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
+
+    // Inject env vars before entering the main loop
+    if !env.is_empty() {
+        // Temporarily set blocking for reliable sends
+        set_ws_nonblocking(&mut ws, false);
+        for env_str in env {
+            if let Some((key, value)) = env_str.split_once('=') {
+                // Defensive: validate env name (should already be validated by caller)
+                if !noid_types::validate_env_name(key) {
+                    continue;
+                }
+                let escaped = value.replace('\'', "'\\''");
+                // Leading space prevents command from appearing in shell history
+                let cmd = format!(" export {key}='{escaped}'\r");
+                send_stdin(&mut ws, cmd.as_bytes());
+            }
+        }
+        // Wait for a sync marker to ensure all export commands are processed
+        // before user input begins. Without this, rapid typing can interleave
+        // with the exports, causing missing env vars or corrupted shell state.
+        // Uses a timestamped marker to avoid false matches from shell output.
+        let sync_marker = format!(
+            "__NOID_ENV_SYNC_{:x}__",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        send_stdin(
+            &mut ws,
+            format!(" echo {sync_marker}\r").as_bytes(),
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut sync_buf = Vec::new();
+        let mut synced = false;
+        while std::time::Instant::now() < deadline {
+            match ws.read() {
+                Ok(Message::Binary(data)) => {
+                    if !data.is_empty() && data[0] == CHANNEL_STDOUT {
+                        sync_buf.extend_from_slice(&data[1..]);
+                        if sync_buf
+                            .windows(sync_marker.len())
+                            .any(|w| w == sync_marker.as_bytes())
+                        {
+                            synced = true;
+                            break;
+                        }
+                    }
+                }
+                Ok(Message::Ping(data)) => {
+                    let _ = ws.send(Message::Pong(data));
+                }
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(ref e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+        if !synced {
+            // Raw mode is active, so use \r\n for correct terminal output
+            let _ = stdout.write_all(b"\r\nWarning: env var sync timed out; vars may not be set yet.\r\n");
+            let _ = stdout.flush();
+        }
+    }
 
     // Line buffer for "exit" detection
     let mut line_buffer = String::new();

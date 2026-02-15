@@ -65,6 +65,9 @@ pub enum Command {
     Console {
         /// VM name (optional if .noid-vm file exists)
         name: Option<String>,
+        /// Set environment variable (KEY=VALUE)
+        #[arg(short = 'e', long = "env")]
+        env: Vec<String>,
     },
     /// Create a checkpoint of a microVM
     Checkpoint {

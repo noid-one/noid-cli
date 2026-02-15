@@ -1,5 +1,55 @@
 use serde::{Deserialize, Serialize};
 
+// --- Env var validation ---
+
+/// Maximum number of env vars allowed per request.
+pub const MAX_ENV_VARS: usize = 64;
+
+/// Maximum length of a single env var value in bytes.
+pub const MAX_ENV_VALUE_LEN: usize = 32 * 1024; // 32 KiB
+
+/// Validate that a string is a legal environment variable name.
+/// Accepts `[A-Za-z_][A-Za-z0-9_]*`.
+pub fn validate_env_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Validate a slice of `KEY=VALUE` env var strings.
+/// Checks format, name validity, count limit, and value size limit.
+/// Returns an error message string on failure, Ok(()) on success.
+pub fn validate_env_vars(env: &[String]) -> Result<(), String> {
+    if env.len() > MAX_ENV_VARS {
+        return Err(format!(
+            "too many env vars ({}, max {MAX_ENV_VARS})",
+            env.len()
+        ));
+    }
+    for e in env {
+        let (name, value) = match e.split_once('=') {
+            Some(pair) => pair,
+            None => return Err(format!("invalid env var (expected KEY=VALUE): {e}")),
+        };
+        if !validate_env_name(name) {
+            return Err(format!("invalid env var name: {name}"));
+        }
+        if value.len() > MAX_ENV_VALUE_LEN {
+            return Err(format!(
+                "env var value too long for {name} ({} bytes, max {MAX_ENV_VALUE_LEN})",
+                value.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
 // --- WS channel constants ---
 
 pub const CHANNEL_STDOUT: u8 = 0x01;
@@ -288,6 +338,64 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["checkpoint_id"], "abc12345");
         assert_eq!(json["new_name"], "restored-vm");
+    }
+
+    #[test]
+    fn validate_env_name_valid() {
+        assert!(validate_env_name("FOO"));
+        assert!(validate_env_name("_BAR"));
+        assert!(validate_env_name("DB_HOST_1"));
+        assert!(validate_env_name("a"));
+        assert!(validate_env_name("_"));
+    }
+
+    #[test]
+    fn validate_env_name_invalid() {
+        assert!(!validate_env_name(""));
+        assert!(!validate_env_name("1FOO"));
+        assert!(!validate_env_name("FOO;rm"));
+        assert!(!validate_env_name("FOO BAR"));
+        assert!(!validate_env_name("FOO=BAR"));
+        assert!(!validate_env_name("a-b"));
+        assert!(!validate_env_name("$(cmd)"));
+    }
+
+    #[test]
+    fn validate_env_vars_valid() {
+        let env = vec!["FOO=bar".into(), "DB_HOST=localhost".into()];
+        assert!(validate_env_vars(&env).is_ok());
+    }
+
+    #[test]
+    fn validate_env_vars_empty_value() {
+        let env = vec!["FOO=".into()];
+        assert!(validate_env_vars(&env).is_ok());
+    }
+
+    #[test]
+    fn validate_env_vars_missing_equals() {
+        let env = vec!["FOO".into()];
+        assert!(validate_env_vars(&env).is_err());
+    }
+
+    #[test]
+    fn validate_env_vars_bad_name() {
+        let env = vec!["1BAD=val".into()];
+        assert!(validate_env_vars(&env).is_err());
+    }
+
+    #[test]
+    fn validate_env_vars_too_many() {
+        let env: Vec<String> = (0..65).map(|i| format!("V{i}=x")).collect();
+        let err = validate_env_vars(&env).unwrap_err();
+        assert!(err.contains("too many"));
+    }
+
+    #[test]
+    fn validate_env_vars_value_too_long() {
+        let env = vec![format!("BIG={}", "x".repeat(33 * 1024))];
+        let err = validate_env_vars(&env).unwrap_err();
+        assert!(err.contains("too long"));
     }
 
     #[test]

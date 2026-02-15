@@ -47,6 +47,14 @@ pub fn handle_exec_ws<S: Read + Write>(
         return;
     }
 
+    if let Err(e) = noid_types::validate_env_vars(&exec_req.env) {
+        let _ = ws.send(Message::Text(
+            serde_json::to_string(&noid_types::ErrorResponse { error: e }).unwrap(),
+        ));
+        let _ = ws.close(None);
+        return;
+    }
+
     // Execute and stream results
     // For now, use the synchronous exec_full and send the output as a single chunk.
     // A true streaming implementation would require refactoring exec_via_serial.
