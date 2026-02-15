@@ -1,8 +1,34 @@
 use anyhow::{Context, Result};
+// PermissionsExt is available on both Linux and macOS (both are Unix-like)
 use std::os::unix::fs::PermissionsExt;
 
 const BINARY_NAME: &str = "noid";
 const REPO: &str = "noid-one/noid-cli";
+
+/// Returns the platform-specific asset name for the current binary.
+/// Release assets use the naming convention: `noid-{os}-{arch}`.
+fn platform_asset_name() -> &'static str {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        "noid-linux-x86_64"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        "noid-darwin-x86_64"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        "noid-darwin-aarch64"
+    }
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
+    {
+        compile_error!("noid client is only supported on Linux x86_64, macOS x86_64, and macOS aarch64")
+    }
+}
 
 pub fn self_update() -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
@@ -26,12 +52,13 @@ pub fn self_update() -> Result<()> {
         return Ok(());
     }
 
+    let asset_name = platform_asset_name();
     let asset = resp["assets"]
         .as_array()
         .context("missing assets array")?
         .iter()
-        .find(|a| a["name"].as_str() == Some(BINARY_NAME))
-        .context(format!("no '{BINARY_NAME}' asset in release"))?;
+        .find(|a| a["name"].as_str() == Some(asset_name))
+        .context(format!("no '{asset_name}' asset in release"))?;
 
     let download_url = asset["browser_download_url"]
         .as_str()
@@ -58,4 +85,36 @@ pub fn self_update() -> Result<()> {
 
     println!("Updated {BINARY_NAME} v{current} -> v{latest}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_asset_name_has_prefix() {
+        let name = platform_asset_name();
+        assert!(
+            name.starts_with("noid-"),
+            "expected platform asset name to start with 'noid-', got '{name}'"
+        );
+    }
+
+    #[test]
+    fn platform_asset_name_contains_os_and_arch() {
+        let name = platform_asset_name();
+        let parts: Vec<&str> = name.split('-').collect();
+        assert_eq!(parts.len(), 3, "expected 'noid-os-arch', got '{name}'");
+        assert_eq!(parts[0], "noid");
+        assert!(
+            ["linux", "darwin"].contains(&parts[1]),
+            "unexpected OS in asset name: {}",
+            parts[1]
+        );
+        assert!(
+            ["x86_64", "aarch64"].contains(&parts[2]),
+            "unexpected arch in asset name: {}",
+            parts[2]
+        );
+    }
 }

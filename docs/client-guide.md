@@ -6,14 +6,22 @@ This guide walks through using the `noid` CLI client to manage Firecracker micro
 
 - A running noid server (see [Server Administration Guide](server-guide.md))
 - An API token from your server admin
-- The `noid` binary installed
+- The `noid` binary installed (Linux x86_64, macOS Intel, or macOS Apple Silicon)
 
 ## Step 1: Install the client
+
+The quickest way:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/noid-one/noid-cli/master/install.sh | bash
+```
+
+Or build from source:
 
 ```bash
 cd noid/
 cargo build --release -p noid-client
-sudo cp target/release/noid $HOME/.local/bin/
+cp target/release/noid ~/.local/bin/
 ```
 
 ## Step 2: Configure authentication

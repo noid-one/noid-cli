@@ -15,10 +15,13 @@ pub struct ServerSection {
 
 impl ClientConfig {
     fn dir() -> PathBuf {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/root"))
-            .join(".noid")
+        // HOME should always be set on Unix systems. If it's not, we can't
+        // reliably determine the user's home directory, so we fail explicitly
+        // rather than guessing wrong (e.g., writing to /var/root for a
+        // non-root user on macOS).
+        let home = std::env::var("HOME")
+            .expect("HOME environment variable must be set. If running from a non-shell context (e.g., cron, launchd), set HOME explicitly.");
+        PathBuf::from(home).join(".noid")
     }
 
     fn path() -> PathBuf {

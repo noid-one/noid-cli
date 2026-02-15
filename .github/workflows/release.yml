@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-client:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: noid-linux-x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: noid-darwin-x86_64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: noid-darwin-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --package noid-client --target ${{ matrix.target }}
+      - run: cp target/${{ matrix.target }}/release/noid ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  build-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --workspace
+      - run: |
+          cp target/release/noid-server noid-server
+          cp target/release/noid-netd noid-netd
+          cp target/release/noid-local noid-local
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-binaries
+          path: |
+            noid-server
+            noid-netd
+            noid-local
+
+  release:
+    needs: [build-client, build-server]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Validate artifacts
+        run: |
+          ls -la artifacts/
+          # Verify no duplicate filenames (safety check)
+          if [ $(ls artifacts/ | sort | uniq -d | wc -l) -gt 0 ]; then
+            echo "ERROR: Duplicate artifacts detected!"
+            exit 1
+          fi
+          # Verify expected files exist
+          for file in noid-linux-x86_64 noid-darwin-x86_64 noid-darwin-aarch64 noid-server noid-netd noid-local; do
+            if [ ! -f "artifacts/$file" ]; then
+              echo "ERROR: Missing expected artifact: $file"
+              exit 1
+            fi
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*

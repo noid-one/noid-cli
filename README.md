@@ -4,7 +4,7 @@ A CLI for managing Firecracker microVMs with instant checkpointing and restore.
 
 Create VMs in one command. Checkpoint them instantly. Clone and restore from any checkpoint.
 
-noid runs as a **client-server** system: `noid-server` manages Firecracker VMs on a Linux host, and `noid` is a CLI client that talks to the server over HTTP and WebSocket. The client can run from anywhere.
+noid runs as a **client-server** system: `noid-server` manages Firecracker VMs on a Linux host, and `noid` is a CLI client that talks to the server over HTTP and WebSocket. The client can run from anywhere — Linux x86_64, macOS Intel, and macOS Apple Silicon.
 
 ## Install
 
@@ -12,17 +12,19 @@ noid runs as a **client-server** system: `noid-server` manages Firecracker VMs o
 curl -fsSL https://raw.githubusercontent.com/noid-one/noid-cli/master/install.sh | bash
 ```
 
-This installs both `noid` and `noid-server` to `~/.local/bin/`. Or download manually:
+This installs `noid` to `~/.local/bin/`. On Linux it also installs `noid-server`. Or download manually:
 
 ```bash
 mkdir -p ~/.local/bin
 
-# Client (run from anywhere)
+# Client — auto-detect platform (macOS reports arm64, but releases use aarch64)
+NOID_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+NOID_ARCH=$(uname -m | sed 's/arm64/aarch64/')  # normalize macOS arm64 → aarch64
 curl -fsSL -o ~/.local/bin/noid \
-  https://github.com/noid-one/noid-cli/releases/latest/download/noid
+  "https://github.com/noid-one/noid-cli/releases/latest/download/noid-${NOID_OS}-${NOID_ARCH}"
 chmod +x ~/.local/bin/noid
 
-# Server (run on the VM host)
+# Server (Linux only — run on the VM host)
 curl -fsSL -o ~/.local/bin/noid-server \
   https://github.com/noid-one/noid-cli/releases/latest/download/noid-server
 chmod +x ~/.local/bin/noid-server
@@ -34,6 +36,15 @@ Make sure `~/.local/bin` is in your `PATH`. Both binaries can update themselves:
 noid update
 noid-server update
 ```
+
+**macOS users:** Downloaded binaries are not notarized. On first run, macOS Gatekeeper may block execution with: _"noid cannot be opened because it is from an unidentified developer."_
+
+Fix by removing the quarantine flag:
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/noid
+```
+
+Or right-click the binary in Finder, select "Open", then confirm.
 
 Or build from source:
 
