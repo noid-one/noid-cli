@@ -145,7 +145,7 @@ WS frames use 1-byte channel prefix: `0x01`=stdout, `0x02`=stderr, `0x03`=stdin.
 - `api.rs` — ureq HTTP client + Bearer auth, API version check
 - `console.rs` — WS + crossterm for interactive console
 - `exec.rs` — WS exec with fallback to HTTP POST
-- `config.rs` — client config (URL, token), .noid active VM file
+- `config.rs` — client config (URL, token), .noid-vm active VM file
 
 **noid-netd**:
 - `main.rs` — daemon: Unix socket listener, request dispatch, orphaned TAP cleanup + iptables setup on startup
@@ -175,11 +175,11 @@ token = "noid_tok_..."
 
 Set via: `noid auth setup --url <url> --token <token>`
 
-### Active VM (.noid file)
+### Active VM (.noid-vm file)
 
-Commands that take `<name>` fall back to `.noid` in CWD:
+Commands that take `<name>` fall back to `.noid-vm` in CWD:
 ```
-noid use myvm        # writes "myvm" to ./.noid
+noid use myvm        # writes "myvm" to ./.noid-vm
 noid exec -- ls      # targets myvm
 ```
 

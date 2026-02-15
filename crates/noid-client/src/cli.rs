@@ -40,19 +40,19 @@ pub enum Command {
     },
     /// Destroy a microVM
     Destroy {
-        /// VM name (optional if .noid file exists)
+        /// VM name (optional if .noid-vm file exists)
         name: Option<String>,
     },
     /// List all microVMs
     List,
     /// Show info about a microVM
     Info {
-        /// VM name (optional if .noid file exists)
+        /// VM name (optional if .noid-vm file exists)
         name: Option<String>,
     },
     /// Execute a command in a microVM
     Exec {
-        /// VM name (optional if .noid file exists)
+        /// VM name (optional if .noid-vm file exists)
         #[arg(long)]
         name: Option<String>,
         /// Set environment variable (KEY=VALUE)
@@ -64,12 +64,12 @@ pub enum Command {
     },
     /// Attach to VM serial console
     Console {
-        /// VM name (optional if .noid file exists)
+        /// VM name (optional if .noid-vm file exists)
         name: Option<String>,
     },
     /// Create a checkpoint of a microVM
     Checkpoint {
-        /// VM name (optional if .noid file exists)
+        /// VM name (optional if .noid-vm file exists)
         #[arg(long)]
         name: Option<String>,
         /// Optional label
@@ -78,14 +78,14 @@ pub enum Command {
     },
     /// List checkpoints for a microVM
     Checkpoints {
-        /// VM name (optional if .noid file exists)
+        /// VM name (optional if .noid-vm file exists)
         name: Option<String>,
     },
     /// Update noid to the latest release
     Update,
     /// Restore a microVM from a checkpoint
     Restore {
-        /// VM name (optional if .noid file exists)
+        /// VM name (optional if .noid-vm file exists)
         #[arg(long)]
         name: Option<String>,
         /// Checkpoint ID

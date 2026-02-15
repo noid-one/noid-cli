@@ -50,41 +50,31 @@ impl ClientConfig {
     }
 }
 
-/// Read the active VM name from .noid file in the given directory.
+/// Read the active VM name from .noid-vm file in the given directory.
 fn read_active_vm_at(dir: &std::path::Path) -> Option<String> {
-    let path = dir.join(".noid");
-    if path.is_dir() {
-        return None;
-    }
-    std::fs::read_to_string(path)
+    std::fs::read_to_string(dir.join(".noid-vm"))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
-/// Read the active VM name from .noid file in CWD.
+/// Read the active VM name from .noid-vm file in CWD.
 pub fn read_active_vm() -> Option<String> {
     read_active_vm_at(std::path::Path::new("."))
 }
 
-/// Write the active VM name to .noid file in the given directory.
+/// Write the active VM name to .noid-vm file in the given directory.
 fn write_active_vm_at(dir: &std::path::Path, name: &str) -> Result<()> {
-    let path = dir.join(".noid");
-    if path.is_dir() {
-        anyhow::bail!(
-            ".noid is a directory (config dir). Run `noid use` from a project directory, not your home directory."
-        );
-    }
-    std::fs::write(path, format!("{name}\n"))?;
+    std::fs::write(dir.join(".noid-vm"), format!("{name}\n"))?;
     Ok(())
 }
 
-/// Write the active VM name to .noid file in CWD.
+/// Write the active VM name to .noid-vm file in CWD.
 pub fn write_active_vm(name: &str) -> Result<()> {
     write_active_vm_at(std::path::Path::new("."), name)
 }
 
-/// Resolve VM name: explicit arg > .noid file > error.
+/// Resolve VM name: explicit arg > .noid-vm file > error.
 pub fn resolve_vm_name(name: Option<&str>) -> Result<String> {
     if let Some(n) = name {
         return Ok(n.to_string());
@@ -133,24 +123,24 @@ mod tests {
     }
 
     #[test]
-    fn write_active_vm_rejects_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join(".noid")).unwrap();
-        let err = write_active_vm_at(dir.path(), "test").unwrap_err();
-        assert!(err.to_string().contains("directory"));
-    }
-
-    #[test]
-    fn read_active_vm_returns_none_for_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join(".noid")).unwrap();
-        assert!(read_active_vm_at(dir.path()).is_none());
-    }
-
-    #[test]
     fn write_and_read_active_vm_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         write_active_vm_at(dir.path(), "my-vm").unwrap();
         assert_eq!(read_active_vm_at(dir.path()).unwrap(), "my-vm");
+    }
+
+    #[test]
+    fn active_vm_no_collision_with_config_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // Simulate ~/.noid/ config directory existing alongside .noid-vm marker
+        std::fs::create_dir(dir.path().join(".noid")).unwrap();
+        write_active_vm_at(dir.path(), "my-vm").unwrap();
+        assert_eq!(read_active_vm_at(dir.path()).unwrap(), "my-vm");
+    }
+
+    #[test]
+    fn read_active_vm_returns_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_active_vm_at(dir.path()).is_none());
     }
 }
