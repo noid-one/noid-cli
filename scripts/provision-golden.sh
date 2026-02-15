@@ -3,7 +3,7 @@
 # provision-golden.sh — Update the golden snapshot used by `noid create`
 #
 # Mode 1: Promote an existing checkpoint
-#   You need a checkpoint first: noid checkpoint --name my-vm --label before-deploy
+#   You need a checkpoint first: noid checkpoint my-vm --label before-deploy
 #   then:
 #   sudo bash scripts/provision-golden.sh --from-checkpoint <checkpoint_id>
 #
@@ -206,7 +206,7 @@ provision_from_scratch() {
     provision_cleanup() {
         echo ""
         warn "Cleaning up temporary VM..."
-        sudo -u "$NOID_USER" noid destroy --name _provision 2>/dev/null || true
+        sudo -u "$NOID_USER" noid destroy _provision 2>/dev/null || true
     }
     trap provision_cleanup EXIT
 
@@ -215,7 +215,7 @@ provision_from_scratch() {
     RETRIES=0
     MAX_RETRIES=60
     while [[ "$RETRIES" -lt "$MAX_RETRIES" ]]; do
-        if sudo -u "$NOID_USER" noid exec --name _provision -- echo ready 2>/dev/null | grep -q ready; then
+        if sudo -u "$NOID_USER" noid exec _provision -- echo ready 2>/dev/null | grep -q ready; then
             break
         fi
         RETRIES=$((RETRIES + 1))
@@ -226,17 +226,17 @@ provision_from_scratch() {
 
     # --- Install Claude Code ---
     step "Installing Claude Code"
-    sudo -u "$NOID_USER" noid exec --name _provision -- sh -c 'curl -fsSL https://claude.ai/install.sh | sh'
+    sudo -u "$NOID_USER" noid exec _provision -- sh -c 'curl -fsSL https://claude.ai/install.sh | sh'
     info "Claude Code installed"
 
     # --- Install opencode ---
     step "Installing opencode"
-    sudo -u "$NOID_USER" noid exec --name _provision -- sh -c 'curl -fsSL https://opencode.ai/install | sh'
+    sudo -u "$NOID_USER" noid exec _provision -- sh -c 'curl -fsSL https://opencode.ai/install | sh'
     info "opencode installed"
 
     # --- Take checkpoint ---
     step "Taking checkpoint"
-    CKPT_OUTPUT=$(sudo -u "$NOID_USER" noid checkpoint --name _provision --label golden-provisioned 2>&1)
+    CKPT_OUTPUT=$(sudo -u "$NOID_USER" noid checkpoint _provision --label golden-provisioned 2>&1)
     echo "    ${CKPT_OUTPUT}"
 
     # Extract checkpoint ID from output (first 16-char hex string)
@@ -249,7 +249,7 @@ provision_from_scratch() {
 
     # --- Cleanup (trap will destroy VM) ---
     step "Destroying temporary VM"
-    sudo -u "$NOID_USER" noid destroy --name _provision 2>/dev/null || true
+    sudo -u "$NOID_USER" noid destroy _provision 2>/dev/null || true
     trap - EXIT
     info "Cleanup complete"
 }

@@ -65,18 +65,18 @@ Edit the provisioning section of `provision-golden.sh` (between the "Waiting for
 ```bash
 # --- Install Claude Code ---
 step "Installing Claude Code"
-sudo -u "$NOID_USER" noid exec --name _provision -- sh -c 'curl -fsSL https://claude.ai/install.sh | sh'
+sudo -u "$NOID_USER" noid exec _provision -- sh -c 'curl -fsSL https://claude.ai/install.sh | sh'
 info "Claude Code installed"
 
 # --- Install opencode ---
 step "Installing opencode"
-sudo -u "$NOID_USER" noid exec --name _provision -- sh -c 'curl -fsSL https://opencode.ai/install | sh'
+sudo -u "$NOID_USER" noid exec _provision -- sh -c 'curl -fsSL https://opencode.ai/install | sh'
 info "opencode installed"
 
 # Add your own tools here:
-# sudo -u "$NOID_USER" noid exec --name _provision -- apt-get update
-# sudo -u "$NOID_USER" noid exec --name _provision -- apt-get install -y git curl build-essential
-# sudo -u "$NOID_USER" noid exec --name _provision -- pip install pytest
+# sudo -u "$NOID_USER" noid exec _provision -- apt-get update
+# sudo -u "$NOID_USER" noid exec _provision -- apt-get install -y git curl build-essential
+# sudo -u "$NOID_USER" noid exec _provision -- pip install pytest
 ```
 
 Every tool you install here will be available instantly in every new VM created from this golden snapshot.
@@ -88,12 +88,12 @@ If you already have a VM configured exactly how you want it, take a checkpoint a
 ```bash
 # 1. Set up your VM however you like
 noid create my-base
-noid exec --name my-base -- apt-get update
-noid exec --name my-base -- apt-get install -y python3 nodejs git
+noid exec my-base -- apt-get update
+noid exec my-base -- apt-get install -y python3 nodejs git
 noid exec -e ANTHROPIC_API_KEY=sk-... -- sh -c 'curl -fsSL https://claude.ai/install.sh | sh'
 
 # 2. Take a checkpoint
-noid checkpoint --name my-base --label golden-ready
+noid checkpoint my-base --label golden-ready
 ```
 
 ```
@@ -147,8 +147,8 @@ The `snapshot_rootfs_path` is the rootfs path that was baked into `vmstate.snap`
 ```bash
 # Create a VM and verify tools are present
 noid create test-golden
-noid exec --name test-golden -- claude --version    # if Claude Code was installed
-noid exec --name test-golden -- python3 --version   # if python3 was installed
+noid exec test-golden -- claude --version    # if Claude Code was installed
+noid exec test-golden -- python3 --version   # if python3 was installed
 noid destroy test-golden
 ```
 
@@ -195,7 +195,7 @@ If you need a different default config, create a VM with those settings, checkpo
 ```bash
 noid create my-base --cpus 2 --mem 4096
 # ... wait for boot, install tools ...
-noid checkpoint --name my-base --label golden-2cpu
+noid checkpoint my-base --label golden-2cpu
 sudo bash scripts/provision-golden.sh --from-checkpoint <id>
 ```
 

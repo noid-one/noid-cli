@@ -465,10 +465,10 @@ sudo iptables -t mangle -L FORWARD -v -n
 
 ```bash
 # Quick TLS test from inside a VM (should complete in <5s)
-noid exec --name myvm -- curl -sS -o /dev/null -w '%{http_code}' https://example.com
+noid exec myvm -- curl -sS -o /dev/null -w '%{http_code}' https://example.com
 
 # Check entropy inside VM
-noid exec --name myvm -- cat /proc/sys/kernel/random/entropy_avail
+noid exec myvm -- cat /proc/sys/kernel/random/entropy_avail
 
 # Run the automated tests
 bash scripts/test-e2e-tls.sh

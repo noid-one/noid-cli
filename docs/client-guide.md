@@ -97,7 +97,7 @@ noid info my-vm
 ## Step 5: Run commands inside a VM
 
 ```bash
-noid exec --name my-vm -- uname -a
+noid exec my-vm -- uname -a
 ```
 
 ```
@@ -107,9 +107,9 @@ Linux ubuntu-fc-uvm 4.14.174 #2 SMP ... x86_64 GNU/Linux
 Commands after `--` are sent to the VM's shell via the serial console. You can run anything:
 
 ```bash
-noid exec --name my-vm -- ls -la /
-noid exec --name my-vm -- cat /etc/os-release
-noid exec --name my-vm -- whoami
+noid exec my-vm -- ls -la /
+noid exec my-vm -- cat /etc/os-release
+noid exec my-vm -- whoami
 ```
 
 ### Commands with special characters
@@ -117,8 +117,8 @@ noid exec --name my-vm -- whoami
 Arguments are shell-escaped automatically, so spaces and special characters work:
 
 ```bash
-noid exec --name my-vm -- echo "hello world"
-noid exec --name my-vm -- sh -c "ls -la | head -5"
+noid exec my-vm -- echo "hello world"
+noid exec my-vm -- sh -c "ls -la | head -5"
 ```
 
 ### Environment variables
@@ -162,8 +162,8 @@ Variable names must match `[A-Za-z_][A-Za-z0-9_]*` (standard POSIX). Invalid nam
 `noid exec` forwards the exit code from the command inside the VM:
 
 ```bash
-noid exec --name my-vm -- true   # exits 0
-noid exec --name my-vm -- false  # exits 1
+noid exec my-vm -- true   # exits 0
+noid exec my-vm -- false  # exits 1
 ```
 
 Special exit code `124` means the command timed out (default: 30 seconds, configured server-side).
@@ -226,7 +226,7 @@ Think of it like hibernating a laptop -- everything freezes in place and can be 
 ### Create a snapshot
 
 ```bash
-noid checkpoint --name my-vm --label before-deploy
+noid checkpoint my-vm --label before-deploy
 ```
 
 ```
@@ -245,16 +245,16 @@ The pause is brief enough that network connections and running services generall
 ### Labels are optional but recommended
 
 ```bash
-noid checkpoint --name my-vm                          # no label
-noid checkpoint --name my-vm --label clean-install    # with label
-noid checkpoint --name my-vm --label claude-code      # descriptive labels help later
+noid checkpoint my-vm                          # no label
+noid checkpoint my-vm --label clean-install    # with label
+noid checkpoint my-vm --label claude-code      # descriptive labels help later
 ```
 
 Good labeling practice: describe what state the VM is in, not when you took the snapshot. The timestamp is recorded automatically.
 
 ### With an active VM
 
-If you've set an active VM with `noid use`, you can omit `--name`:
+If you've set an active VM with `noid use`, you can omit the name:
 
 ```bash
 noid use my-vm
@@ -287,7 +287,7 @@ There are two ways to restore: **clone** into a new VM, or **restore in place**.
 Create a new VM from a snapshot, leaving the original untouched:
 
 ```bash
-noid restore --name my-vm a1b2c3d4e5f67890 --as my-vm-copy
+noid restore my-vm a1b2c3d4e5f67890 --as my-vm-copy
 ```
 
 ```
@@ -306,7 +306,7 @@ This is the recommended way to use snapshots for:
 Replace the current VM's state with the snapshot:
 
 ```bash
-noid restore --name my-vm a1b2c3d4e5f67890
+noid restore my-vm a1b2c3d4e5f67890
 ```
 
 This **destroys the current VM** (kills the process, removes its storage) and recreates it from the snapshot. Use this to "rewind" a VM to a known good state.
@@ -359,7 +359,7 @@ noid exec -- sh -c "cd /app && npm install && npm run build"
 
 # Something went wrong? Rewind to the clean state
 noid checkpoints dev                          # find the checkpoint ID
-noid restore --name dev <checkpoint-id>       # VM restarts from snapshot
+noid restore dev <checkpoint-id>       # VM restarts from snapshot
 
 # Happy with the result? Snapshot again before the next risky step
 noid checkpoint --label after-build
@@ -372,20 +372,20 @@ Set up a VM once, snapshot it, then clone it for each use:
 ```bash
 # One-time setup: create and configure a base VM
 noid create base
-noid exec --name base -- apt-get update
-noid exec --name base -- apt-get install -y python3 pip git curl
-noid exec --name base -- pip install pytest requests
+noid exec base -- apt-get update
+noid exec base -- apt-get install -y python3 pip git curl
+noid exec base -- pip install pytest requests
 
 # Snapshot the prepared environment
-noid checkpoint --name base --label ready
+noid checkpoint base --label ready
 
 # Later: spin up clones whenever you need a fresh copy
-noid restore --name base <checkpoint-id> --as alice-dev
-noid restore --name base <checkpoint-id> --as bob-dev
-noid restore --name base <checkpoint-id> --as ci-runner
+noid restore base <checkpoint-id> --as alice-dev
+noid restore base <checkpoint-id> --as bob-dev
+noid restore base <checkpoint-id> --as ci-runner
 
 # Each clone starts with all tools pre-installed
-noid exec --name alice-dev -- python3 --version   # works immediately
+noid exec alice-dev -- python3 --version   # works immediately
 ```
 
 ### Testing workflow
@@ -395,19 +395,19 @@ Spin up isolated VMs for parallel testing:
 ```bash
 # Create a base VM and set it up
 noid create test-base
-noid exec --name test-base -- apt-get update
-noid exec --name test-base -- apt-get install -y python3
-noid checkpoint --name test-base --label ready
+noid exec test-base -- apt-get update
+noid exec test-base -- apt-get install -y python3
+noid checkpoint test-base --label ready
 
 # Clone it for each test run
-noid restore --name test-base <checkpoint-id> --as test-run-1
-noid restore --name test-base <checkpoint-id> --as test-run-2
-noid restore --name test-base <checkpoint-id> --as test-run-3
+noid restore test-base <checkpoint-id> --as test-run-1
+noid restore test-base <checkpoint-id> --as test-run-2
+noid restore test-base <checkpoint-id> --as test-run-3
 
 # Run tests in parallel
-noid exec --name test-run-1 -- python3 /tests/suite_a.py &
-noid exec --name test-run-2 -- python3 /tests/suite_b.py &
-noid exec --name test-run-3 -- python3 /tests/suite_c.py &
+noid exec test-run-1 -- python3 /tests/suite_a.py &
+noid exec test-run-2 -- python3 /tests/suite_b.py &
+noid exec test-run-3 -- python3 /tests/suite_c.py &
 wait
 
 # Clean up
@@ -423,7 +423,7 @@ Create short-lived VMs for each deployment:
 ```bash
 BRANCH="feature-login"
 noid create "preview-${BRANCH}" --cpus 2 --mem 256
-noid exec --name "preview-${BRANCH}" -- sh -c "cd /app && git pull && ./start.sh"
+noid exec "preview-${BRANCH}" -- sh -c "cd /app && git pull && ./start.sh"
 # ... run tests, show preview ...
 noid destroy "preview-${BRANCH}"
 ```
@@ -450,14 +450,14 @@ The variable exists only for the duration of that command. Compare this to the u
 | `noid create <name> [--cpus N] [--mem MiB]` | Create and boot a VM |
 | `noid list` | List all VMs |
 | `noid info [name]` | Show VM details |
-| `noid exec [--name NAME] [-e KEY=VAL]... -- <command...>` | Run a command inside a VM |
+| `noid exec [name] [-e KEY=VAL]... -- <command...>` | Run a command inside a VM |
 | `noid console [name]` | Attach interactive serial console (type "exit" to detach) |
-| `noid checkpoint [--name NAME] [--label TEXT]` | Snapshot a running VM (memory + disk + CPU) |
+| `noid checkpoint [name] [--label TEXT]` | Snapshot a running VM (memory + disk + CPU) |
 | `noid checkpoints [name]` | List snapshots for a VM |
-| `noid restore [--name NAME] <id> [--as NEW]` | Restore or clone a VM from a snapshot |
+| `noid restore [name] <id> [--as NEW]` | Restore or clone a VM from a snapshot |
 | `noid destroy [name]` | Stop and remove a VM |
 
-Commands that show `[name]` use a positional argument. Commands that show `[--name NAME]` use a flag. All are optional if an active VM is set via `noid use`.
+All commands that take a VM name accept it as a positional argument. The name is optional if an active VM is set via `noid use`.
 
 ## Client config files
 

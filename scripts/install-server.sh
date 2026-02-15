@@ -468,7 +468,7 @@ GCEOF
             fi
         fi
         if sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
-            noid exec --name _golden -- echo ready 2>/dev/null | grep -q ready; then
+            noid exec _golden -- echo ready 2>/dev/null | grep -q ready; then
             break
         fi
         RETRIES=$((RETRIES + 1))
@@ -481,7 +481,7 @@ GCEOF
         echo -e "    ${YELLOW}VMs will use slow cold-boot (no golden snapshot)${NC}"
         echo ""
         sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
-            noid destroy --name _golden 2>/dev/null || true
+            noid destroy _golden 2>/dev/null || true
         sudo -u firecracker env PATH="${USER_BIN_DIR}:${CARGO_BIN}:${PATH}" \
             noid-server remove-user _template 2>/dev/null || true
         golden_cleanup
@@ -492,7 +492,7 @@ GCEOF
         # Take checkpoint
         echo "    Taking golden snapshot..."
         sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
-            noid checkpoint --name _golden --label golden
+            noid checkpoint _golden --label golden
 
         # Find the checkpoint files — they're in the VM's subvolume
         # The checkpoint command creates memory.snap + vmstate.snap in the VM dir
@@ -519,7 +519,7 @@ CONFEOF
 
         # Cleanup: destroy template VM and user
         sudo -u firecracker env PATH="${CARGO_BIN}:${PATH}" HOME="${NOID_DIR}" \
-            noid destroy --name _golden 2>/dev/null || true
+            noid destroy _golden 2>/dev/null || true
         sudo -u firecracker env PATH="${USER_BIN_DIR}:${CARGO_BIN}:${PATH}" \
             noid-server remove-user _template 2>/dev/null || true
 

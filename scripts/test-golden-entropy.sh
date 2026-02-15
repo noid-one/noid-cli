@@ -42,7 +42,7 @@ VM_NAME="_test-entropy-$$"
 GOLDEN_DIR="${HOME}/.noid/golden"
 
 cleanup() {
-    noid destroy --name "$VM_NAME" 2>/dev/null || true
+    noid destroy "$VM_NAME" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -90,7 +90,7 @@ noid create "$VM_NAME" > /dev/null 2>&1
 # Wait for VM to boot
 RETRIES=0
 while [ "$RETRIES" -lt 30 ]; do
-    if noid exec --name "$VM_NAME" -- echo ready 2>/dev/null | grep -q ready; then
+    if noid exec "$VM_NAME" -- echo ready 2>/dev/null | grep -q ready; then
         break
     fi
     RETRIES=$((RETRIES + 1))
@@ -103,7 +103,7 @@ if [ "$RETRIES" -ge 30 ]; then
 fi
 
 # Check CRNG status via dmesg — on a properly snapshotted kernel, CRNG is already initialized
-CRNG_OUTPUT=$(noid exec --name "$VM_NAME" -- dmesg 2>/dev/null || echo "")
+CRNG_OUTPUT=$(noid exec "$VM_NAME" -- dmesg 2>/dev/null || echo "")
 if echo "$CRNG_OUTPUT" | grep -q "crng init done"; then
     # Check timestamp — should be very early (< 5 seconds), meaning it was already done at boot
     CRNG_TIME=$(echo "$CRNG_OUTPUT" | grep "crng init done" | grep -oP '^\[\s*\K[0-9]+' | head -1 || echo "999")
@@ -119,7 +119,7 @@ else
 fi
 
 # Check entropy_avail — should be high if CRNG is seeded
-ENTROPY=$(noid exec --name "$VM_NAME" -- cat /proc/sys/kernel/random/entropy_avail 2>/dev/null | tr -d '[:space:]' || echo "0")
+ENTROPY=$(noid exec "$VM_NAME" -- cat /proc/sys/kernel/random/entropy_avail 2>/dev/null | tr -d '[:space:]' || echo "0")
 if [ -n "$ENTROPY" ] && [ "$ENTROPY" -gt 100 ] 2>/dev/null; then
     check "entropy_avail=${ENTROPY} (sufficient for TLS)" "1"
 else
@@ -131,7 +131,7 @@ echo ""
 echo "Test 4: getrandom() is non-blocking"
 # dd from /dev/urandom with a timeout — if CRNG is not ready, this hangs
 START=$(date +%s)
-DD_OUTPUT=$(noid exec --name "$VM_NAME" -- dd if=/dev/urandom bs=32 count=1 2>/dev/null | wc -c || echo "0")
+DD_OUTPUT=$(noid exec "$VM_NAME" -- dd if=/dev/urandom bs=32 count=1 2>/dev/null | wc -c || echo "0")
 END=$(date +%s)
 ELAPSED=$((END - START))
 

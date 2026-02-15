@@ -14,7 +14,7 @@ TIMEOUT=15
 
 cleanup() {
     echo "Cleaning up..."
-    noid destroy --name "$VM_NAME" 2>/dev/null || true
+    noid destroy "$VM_NAME" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -36,7 +36,7 @@ echo -e "  ${GREEN}OK${NC} VM created"
 echo "Waiting for VM to boot..."
 RETRIES=0
 while [ "$RETRIES" -lt 30 ]; do
-    if noid exec --name "$VM_NAME" -- echo ready 2>/dev/null | grep -q ready; then
+    if noid exec "$VM_NAME" -- echo ready 2>/dev/null | grep -q ready; then
         break
     fi
     RETRIES=$((RETRIES + 1))
@@ -51,7 +51,7 @@ echo -e "  ${GREEN}OK${NC} VM ready"
 # Step 3: Test HTTPS immediately (the critical test)
 echo "Testing HTTPS (${TIMEOUT}s timeout)..."
 START=$(date +%s)
-HTTP_CODE=$(noid exec --name "$VM_NAME" -- \
+HTTP_CODE=$(noid exec "$VM_NAME" -- \
     curl -sS -o /dev/null -w '%{http_code}' --connect-timeout "$TIMEOUT" --max-time "$TIMEOUT" \
     https://example.com 2>/dev/null || echo "TIMEOUT")
 END=$(date +%s)
@@ -79,7 +79,7 @@ fi
 
 # Step 4: Verify entropy source exists
 echo "Checking /dev/urandom entropy..."
-ENTROPY_CHECK=$(noid exec --name "$VM_NAME" -- cat /proc/sys/kernel/random/entropy_avail 2>/dev/null || echo "0")
+ENTROPY_CHECK=$(noid exec "$VM_NAME" -- cat /proc/sys/kernel/random/entropy_avail 2>/dev/null || echo "0")
 # Trim whitespace
 ENTROPY_CHECK=$(echo "$ENTROPY_CHECK" | tr -d '[:space:]')
 if [ -n "$ENTROPY_CHECK" ] && [ "$ENTROPY_CHECK" -gt 0 ] 2>/dev/null; then

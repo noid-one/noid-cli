@@ -53,7 +53,6 @@ pub enum Command {
     /// Execute a command in a microVM
     Exec {
         /// VM name (optional if .noid-vm file exists)
-        #[arg(long)]
         name: Option<String>,
         /// Set environment variable (KEY=VALUE)
         #[arg(short = 'e', long = "env")]
@@ -70,7 +69,6 @@ pub enum Command {
     /// Create a checkpoint of a microVM
     Checkpoint {
         /// VM name (optional if .noid-vm file exists)
-        #[arg(long)]
         name: Option<String>,
         /// Optional label
         #[arg(long)]
@@ -86,7 +84,6 @@ pub enum Command {
     /// Restore a microVM from a checkpoint
     Restore {
         /// VM name (optional if .noid-vm file exists)
-        #[arg(long)]
         name: Option<String>,
         /// Checkpoint ID
         checkpoint_id: String,

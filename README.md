@@ -114,11 +114,11 @@ noid create beefy-vm --cpus 4 --mem 512
 ### Run commands
 
 ```bash
-noid exec --name my-vm -- uname -a
+noid exec my-vm -- uname -a
 # Linux noid 6.12.71 ...
 ```
 
-Set an active VM to skip `--name`:
+Set an active VM to skip the name:
 
 ```bash
 noid use my-vm
@@ -137,16 +137,16 @@ Type `exit` to detach (the VM keeps running).
 
 ```bash
 # Snapshot a running VM
-noid checkpoint --name my-vm --label before-deploy
+noid checkpoint my-vm --label before-deploy
 
 # List checkpoints
 noid checkpoints my-vm
 
 # Clone from a checkpoint into a new VM
-noid restore --name my-vm a1b2c3d4 --as my-vm-copy
+noid restore my-vm a1b2c3d4 --as my-vm-copy
 
 # Or restore in-place (replaces the current VM)
-noid restore --name my-vm a1b2c3d4
+noid restore my-vm a1b2c3d4
 ```
 
 On btrfs, checkpoints and clones are instant (zero-copy). On ext4, they fall back to regular file copies.
@@ -173,11 +173,11 @@ noid destroy my-vm
 | `noid destroy [name]` | Stop and remove a VM |
 | `noid list` | List all VMs |
 | `noid info [name]` | Show VM details |
-| `noid exec [--name NAME] -- <command...>` | Run a command inside a VM |
+| `noid exec [name] [-e KEY=VAL]... -- <command...>` | Run a command inside a VM |
 | `noid console [name]` | Interactive serial console (type "exit" to detach) |
-| `noid checkpoint [--name NAME] [--label TEXT]` | Snapshot a running VM |
+| `noid checkpoint [name] [--label TEXT]` | Snapshot a running VM |
 | `noid checkpoints [name]` | List checkpoints |
-| `noid restore [--name NAME] <id> [--as NEW]` | Restore from checkpoint |
+| `noid restore [name] <id> [--as NEW]` | Restore from checkpoint |
 | `noid update` | Update noid to the latest release |
 
 ### Server (`noid-server`)
