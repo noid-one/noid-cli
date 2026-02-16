@@ -8,3 +8,7 @@ rootfs = "/home/firecracker/rootfs.ext4"
 # trust_forwarded_for = false
 # exec_timeout_secs = 30
 # console_timeout_secs = 3600
+
+# For HTTPS via Caddy reverse proxy, use:
+# listen = "127.0.0.1:7654"
+# trust_forwarded_for = true

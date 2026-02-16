@@ -164,7 +164,6 @@ impl ApiClient {
     ) -> Result<tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>>
     {
         use std::net::{TcpStream, ToSocketAddrs};
-        use tungstenite::stream::MaybeTlsStream;
 
         let ws_url = self.ws_url(path);
         let uri: tungstenite::http::Uri = ws_url.parse().context("invalid WebSocket URL")?;
@@ -204,16 +203,15 @@ impl ApiClient {
             .body(())
             .context("failed to build WS request")?;
 
-        let (ws, _) = tungstenite::client::client(request, MaybeTlsStream::Plain(stream)).map_err(
-            |e| match e {
+        let (ws, _) =
+            tungstenite::client_tls(request, stream).map_err(|e| match e {
                 tungstenite::HandshakeError::Interrupted(_) => {
                     anyhow::anyhow!("WebSocket handshake interrupted (WouldBlock)")
                 }
                 tungstenite::HandshakeError::Failure(e) => {
                     anyhow::anyhow!("WebSocket handshake failed: {e}")
                 }
-            },
-        )?;
+            })?;
 
         Ok(ws)
     }

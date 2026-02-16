@@ -238,8 +238,20 @@ pub fn attach_console(api: &ApiClient, vm_name: &str, env: &[String]) -> Result<
 }
 
 fn set_ws_nonblocking(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>, nonblocking: bool) {
-    if let MaybeTlsStream::Plain(stream) = ws.get_mut() {
-        let _ = stream.set_nonblocking(nonblocking);
+    match ws.get_mut() {
+        MaybeTlsStream::Plain(stream) => {
+            let _ = stream.set_nonblocking(nonblocking);
+        }
+        MaybeTlsStream::Rustls(tls_stream) => {
+            let _ = tls_stream.get_mut().set_nonblocking(nonblocking);
+        }
+        _ => {
+            // NativeTls or __Unsupported variants.
+            // Since we only enable rustls-tls-webpki-roots, we should only see Plain/Rustls.
+            // Log a warning in debug builds if we encounter an unexpected variant.
+            #[cfg(debug_assertions)]
+            eprintln!("Warning: set_ws_nonblocking called on unsupported stream type");
+        }
     }
 }
 

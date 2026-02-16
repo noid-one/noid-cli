@@ -533,11 +533,21 @@ fi
 step "Writing server.toml (for production use)"
 # In-repo config (development convenience)
 SERVER_TOML="${NOID_REPO}/server.toml"
-cat > "$SERVER_TOML" << EOF
+if [ -n "${NOID_DOMAIN:-}" ]; then
+    # Caddy will handle external traffic; bind localhost only
+    cat > "$SERVER_TOML" << EOF
+listen = "127.0.0.1:7654"
+trust_forwarded_for = true
+kernel = "${KERNEL_PATH}"
+rootfs = "${ROOTFS_PATH}"
+EOF
+else
+    cat > "$SERVER_TOML" << EOF
 listen = "0.0.0.0:7654"
 kernel = "${KERNEL_PATH}"
 rootfs = "${ROOTFS_PATH}"
 EOF
+fi
 chown firecracker:firecracker "$SERVER_TOML"
 echo "    ${SERVER_TOML}"
 
@@ -547,6 +557,43 @@ cp "$SERVER_TOML" /etc/noid/server.toml
 chmod 644 /etc/noid/server.toml
 echo "    /etc/noid/server.toml"
 
+# --- Step 11: Caddy reverse proxy (optional) ---
+
+if [ -n "${NOID_DOMAIN:-}" ]; then
+    step "Setting up Caddy reverse proxy for ${NOID_DOMAIN}"
+
+    # Validate domain name to prevent injection (basic check for hostname format)
+    if ! echo "$NOID_DOMAIN" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'; then
+        fail "Invalid NOID_DOMAIN: must be a valid domain name (got: ${NOID_DOMAIN})"
+    fi
+
+    if ! command -v caddy &>/dev/null; then
+        echo "    Installing Caddy from official apt repo..."
+        apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl > /dev/null
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+        apt-get update -qq
+        apt-get install -y -qq caddy > /dev/null
+        echo "    Caddy installed"
+    else
+        warn "Caddy already installed ($(caddy version 2>/dev/null | head -1))"
+    fi
+
+    # Write Caddyfile only if Caddy was successfully installed
+    if command -v caddy &>/dev/null; then
+        cat > /etc/caddy/Caddyfile << EOF
+${NOID_DOMAIN} {
+    reverse_proxy localhost:7654
+}
+EOF
+        echo "    /etc/caddy/Caddyfile"
+
+        systemctl enable caddy > /dev/null 2>&1
+        systemctl restart caddy
+        echo "    Caddy: $(systemctl is-active caddy)"
+    fi
+fi
+
 # --- Done: Start services ---
 
 step "Starting services"
@@ -554,6 +601,9 @@ systemctl restart noid-netd
 systemctl restart noid-server
 echo "    noid-netd:    $(systemctl is-active noid-netd)"
 echo "    noid-server:  $(systemctl is-active noid-server)"
+if [ -n "${NOID_DOMAIN:-}" ]; then
+    echo "    caddy:        $(systemctl is-active caddy)"
+fi
 
 echo ""
 echo -e "${GREEN}=== noid installed ===${NC}"
@@ -566,13 +616,27 @@ echo "  Config:       ${SERVER_TOML}, /etc/noid/server.toml"
 echo "  Networking:   172.16.0.0/16 NAT via ${DEFAULT_IF}"
 echo "  noid-netd:    $(systemctl is-active noid-netd)"
 echo "  noid-server:  $(systemctl is-active noid-server)"
+if [ -n "${NOID_DOMAIN:-}" ]; then
+    echo "  Caddy:        $(systemctl is-active caddy)"
+    echo "  HTTPS:        https://${NOID_DOMAIN}"
+fi
 echo ""
 echo "Services (survive reboot):"
 echo "  systemctl status noid-server noid-netd"
 echo "  journalctl -u noid-server -f"
 echo ""
-echo "Next steps:"
-echo "  1. Add a user:        noid-server add-user alice"
-echo "  2. Configure client:  noid auth setup --url http://localhost:7654 --token <token>"
-echo "  3. Create a VM:       noid create myvm"
-echo "  4. Optional: Install Claude Code in a VM, then checkpoint to update the golden snapshot"
+if [ -n "${NOID_DOMAIN:-}" ]; then
+    echo "Next steps:"
+    echo "  1. Add a user:        noid-server add-user alice"
+    echo "  2. Configure client:  noid auth setup --url https://${NOID_DOMAIN} --token <token>"
+    echo "  3. Create a VM:       noid create myvm"
+    echo "  4. Optional: Install Claude Code in a VM, then checkpoint to update the golden snapshot"
+else
+    echo "Next steps:"
+    echo "  1. Add a user:        noid-server add-user alice"
+    echo "  2. Configure client:  noid auth setup --url http://localhost:7654 --token <token>"
+    echo "  3. Create a VM:       noid create myvm"
+    echo "  4. Optional: Install Claude Code in a VM, then checkpoint to update the golden snapshot"
+    echo ""
+    echo "For HTTPS: re-run with NOID_DOMAIN=your.domain sudo bash scripts/install-server.sh"
+fi

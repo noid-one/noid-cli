@@ -1,3 +1,4 @@
-listen = "0.0.0.0:7654"
+listen = "127.0.0.1:7654"
+trust_forwarded_for = true
 kernel = "/home/firecracker/vmlinux.bin"
 rootfs = "/home/firecracker/rootfs.ext4"

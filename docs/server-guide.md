@@ -298,6 +298,83 @@ sudo mount -o loop ~/.noid/storage.img ~/.noid/storage/
 | Restore/clone | writable snapshot (instant) | `cp -a` (copies everything) |
 | Delete VM | `btrfs subvolume delete` | `rm -rf` |
 
+## HTTPS with Caddy (recommended for production)
+
+By default, noid-server runs plain HTTP. For production deployments, use [Caddy](https://caddyserver.com/) as a reverse proxy to get automatic HTTPS via Let's Encrypt.
+
+### Automated setup
+
+Set the `NOID_DOMAIN` environment variable when running the installer:
+
+```bash
+NOID_DOMAIN=server.noid.one sudo -E bash scripts/install-server.sh
+```
+
+This will:
+- Install Caddy from the official apt repository
+- Generate `/etc/caddy/Caddyfile` with your domain
+- Set `listen = "127.0.0.1:7654"` and `trust_forwarded_for = true` in `/etc/noid/server.toml`
+- Enable and start the Caddy service
+
+Caddy will automatically obtain a TLS certificate from Let's Encrypt on first request. **Note:** Let's Encrypt has rate limits (50 certificates per registered domain per week). Avoid repeatedly reinstalling with the same domain.
+
+### Manual setup
+
+1. Install Caddy: https://caddyserver.com/docs/install
+
+2. Create `/etc/caddy/Caddyfile`:
+
+```
+server.noid.one {
+    reverse_proxy localhost:7654
+}
+```
+
+3. Update `/etc/noid/server.toml`:
+
+```toml
+listen = "127.0.0.1:7654"
+trust_forwarded_for = true
+```
+
+4. Restart services:
+
+```bash
+sudo systemctl restart noid-server
+sudo systemctl enable --now caddy
+```
+
+### DNS records
+
+Point your domain to the server before enabling Caddy (Let's Encrypt needs to verify ownership):
+
+- `A` record: `server.noid.one` → your server's IPv4 address
+- `AAAA` record: `server.noid.one` → your server's IPv6 address (optional)
+
+**Important:** Wait for DNS propagation (typically 5-60 minutes) before running the installer with `NOID_DOMAIN`. You can check propagation with:
+```bash
+dig +short server.noid.one
+# Should return your server's IP address
+```
+
+### Client configuration
+
+Once HTTPS is active, configure clients with the HTTPS URL:
+
+```bash
+noid auth setup --url https://server.noid.one --token <token>
+```
+
+The client automatically uses `wss://` for WebSocket connections (console, exec) when the server URL is `https://`.
+
+### Firewall
+
+Ensure ports 80 (ACME challenge) and 443 (HTTPS) are open. Port 7654 should be blocked from external access since noid-server now binds localhost only.
+
+### Certificate Management
+
+Caddy automatically obtains and renews TLS certificates from Let's Encrypt. Certificates are stored in `/var/lib/caddy/.local/share/caddy/certificates/`. If you reinstall the server or migrate to new hardware, you can backup and restore this directory to avoid re-issuing certificates.
+
 ## Security
 
 ### Authentication

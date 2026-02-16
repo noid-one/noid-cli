@@ -11,7 +11,7 @@ path = "src/main.rs"
 noid-types = { path = "../noid-types" }
 clap = { version = "4", features = ["derive"] }
 ureq = { version = "2", features = ["json"] }
-tungstenite = "0.24"
+tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 crossterm = "0.28"
 tabled = "0.17"
 toml = "0.8"
