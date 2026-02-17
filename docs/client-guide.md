@@ -37,8 +37,9 @@ This saves the server URL and token to `~/.noid/config.toml` and verifies the co
 On success:
 
 ```
-Configuration saved.
-Logged in as: alice (id: abc123...)
+Configuration saved to /home/you/.noid/config.toml.
+Server: http://localhost
+Authenticated as 'alice' (id: abc123...)
 ```
 
 ### Verify your identity
@@ -70,7 +71,7 @@ noid create my-vm
 VM 'my-vm' created (state: running)
 ```
 
-The VM boots with default resources (1 vCPU, 256 MiB RAM). Override with flags:
+The VM boots with default resources (1 vCPU, 2048 MiB RAM). Override with flags:
 
 ```bash
 noid create beefy-vm --cpus 4 --mem 512
@@ -88,7 +89,7 @@ noid list
 +----------+---------+------+-----------+---------------------+
 | name     | state   | cpus | mem (MiB) | created             |
 +----------+---------+------+-----------+---------------------+
-| my-vm    | running | 1    | 256       | 2026-02-12 10:30:00 |
+| my-vm    | running | 1    | 2048      | 2026-02-12 10:30:00 |
 | beefy-vm | running | 4    | 512       | 2026-02-12 10:31:00 |
 +----------+---------+------+-----------+---------------------+
 ```
@@ -198,7 +199,7 @@ If you're working with the same VM repeatedly, set it as the active VM for the c
 noid use my-vm
 ```
 
-This writes the VM name to a `.noid` file in the current directory. After this, you can omit the VM name from commands:
+This writes the VM name to a `.noid-vm` file in the current directory. After this, you can omit the VM name from commands:
 
 ```bash
 noid exec -- ls -la        # targets my-vm
@@ -459,7 +460,7 @@ The variable exists only for the duration of that command. Compare this to the u
 | `noid list` | List all VMs |
 | `noid info [name]` | Show VM details |
 | `noid exec [name] [-e KEY=VAL]... -- <command...>` | Run a command inside a VM |
-| `noid console [name]` | Attach interactive serial console (type "exit" to detach) |
+| `noid console [name] [-e KEY=VAL]...` | Attach interactive serial console (type "exit" to detach) |
 | `noid checkpoint [name] [--label TEXT]` | Snapshot a running VM (memory + disk + CPU) |
 | `noid checkpoints [name]` | List snapshots for a VM |
 | `noid restore [name] <id> [--as NEW]` | Restore or clone a VM from a snapshot |
@@ -479,7 +480,7 @@ url = "http://localhost"
 token = "noid_tok_..."
 ```
 
-### .noid (per-directory)
+### .noid-vm (per-directory)
 
 Created by `noid use <name>`. Plain text file containing just the VM name:
 
@@ -493,7 +494,28 @@ my-vm
 
 The server is not running or is on a different address. Check:
 - Is `noid-server serve` running?
-- Does the URL in `~/.noid/config.toml` match the server's `listen` address?
+- Does the URL in `~/.noid/config.toml` match how clients should connect?
+- If you enabled Caddy/HTTPS, this must be `https://your-domain` (not `http://<old-ip>:7654`).
+- Run `noid auth setup --url https://your-domain --token <token>` to replace stale endpoints.
+
+### Auth setup still points to an old IP
+
+`noid auth setup` stores both URL and token. A new token alone does not migrate old URLs.
+
+```bash
+noid auth setup --url https://server.noid.one --token <new-token>
+noid current
+```
+
+`noid current` should show the expected HTTPS URL.
+
+### Proxy environment variables
+
+By default, noid ignores `HTTP_PROXY`/`HTTPS_PROXY` for direct server access. To force proxy usage, set:
+
+```bash
+NOID_USE_SYSTEM_PROXY=1 noid whoami
+```
 
 ### "unauthorized" (401)
 

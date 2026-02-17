@@ -106,19 +106,35 @@ fn api_client() -> Result<api::ApiClient> {
 }
 
 fn cmd_auth_setup(url: &str, token: &str) -> Result<()> {
+    let normalized_url = api::normalize_server_url(url)?;
     let mut config = ClientConfig::load()?;
     config.server = Some(ServerSection {
-        url: url.to_string(),
+        url: normalized_url.clone(),
         token: token.to_string(),
     });
     config.save()?;
-    println!("Configuration saved.");
+    println!(
+        "Configuration saved to {}.",
+        ClientConfig::config_path().display()
+    );
+    println!("Server: {}", normalized_url);
 
     // Verify connection
     let api = api::ApiClient::new(config.server.as_ref().unwrap());
     match api.whoami() {
         Ok(who) => println!("Authenticated as '{}' (id: {})", who.name, who.user_id),
-        Err(e) => eprintln!("Warning: could not verify connection: {e}"),
+        Err(e) => {
+            eprintln!(
+                "Warning: could not verify connection to {}: {e}",
+                normalized_url
+            );
+            if api::using_system_proxy() {
+                eprintln!("Hint: NOID_USE_SYSTEM_PROXY is enabled; verify your proxy settings.");
+            } else if api::proxy_env_vars_present() {
+                eprintln!("Hint: proxy env vars are set but ignored by default. If you need them, set NOID_USE_SYSTEM_PROXY=1.");
+            }
+            eprintln!("Run `noid current` to confirm the saved server URL.");
+        }
     }
     Ok(())
 }

@@ -4,52 +4,134 @@ use noid_types::*;
 use crate::config::ServerSection;
 
 const API_VERSION: u32 = 1;
+const HTTP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const WS_CONNECT_ATTEMPT_CAP: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+pub fn using_system_proxy() -> bool {
+    env_truthy("NOID_USE_SYSTEM_PROXY")
+}
+
+pub fn proxy_env_vars_present() -> bool {
+    [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ]
+    .iter()
+    .any(|name| std::env::var_os(name).is_some())
+}
+
+pub fn normalize_server_url(url: &str) -> Result<String> {
+    let normalized = url.trim().trim_end_matches('/').to_string();
+    if normalized.is_empty() {
+        anyhow::bail!("server URL cannot be empty");
+    }
+
+    let uri: tungstenite::http::Uri = normalized
+        .parse()
+        .with_context(|| format!("invalid server URL: '{normalized}'"))?;
+
+    let scheme = uri
+        .scheme_str()
+        .ok_or_else(|| anyhow::anyhow!("server URL must include scheme (http:// or https://)"))?;
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("unsupported URL scheme '{scheme}' (expected http:// or https://)");
+    }
+
+    if uri.authority().is_none() {
+        anyhow::bail!("server URL must include host");
+    }
+
+    Ok(normalized)
+}
 
 pub struct ApiClient {
     base_url: String,
-    token: String,
+    auth_header: String,
     agent: ureq::Agent,
 }
 
 impl ApiClient {
     pub fn new(server: &ServerSection) -> Self {
-        let agent = ureq::AgentBuilder::new()
+        let mut builder = ureq::AgentBuilder::new()
             .user_agent(&format!("noid/{}", env!("CARGO_PKG_VERSION")))
-            .build();
+            .timeout_connect(HTTP_CONNECT_TIMEOUT)
+            .timeout_read(std::time::Duration::from_secs(30));
+        if !using_system_proxy() {
+            builder = builder.try_proxy_from_env(false);
+        }
+        let agent = builder.build();
         Self {
             base_url: server.url.trim_end_matches('/').to_string(),
-            token: server.token.clone(),
+            auth_header: format!("Bearer {}", server.token),
             agent,
         }
     }
 
+    fn validate_name(name: &str) -> Result<&str> {
+        anyhow::ensure!(!name.is_empty(), "VM name cannot be empty");
+        anyhow::ensure!(name.len() <= 64, "VM name too long (max 64 characters)");
+        anyhow::ensure!(
+            !name.starts_with('.') && !name.starts_with('-'),
+            "VM name cannot start with . or -"
+        );
+        anyhow::ensure!(
+            !name.contains(".."),
+            "VM name cannot contain '..'"
+        );
+        anyhow::ensure!(
+            name.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.'),
+            "VM name contains invalid characters"
+        );
+        Ok(name)
+    }
+
     fn get(&self, path: &str) -> Result<ureq::Response> {
         let url = format!("{}{path}", self.base_url);
-        let resp = self.agent.get(&url)
-            .set("Authorization", &format!("Bearer {}", self.token))
+        let resp = self
+            .agent
+            .get(&url)
+            .set("Authorization", &self.auth_header)
             .call()
             .map_err(|e| self.handle_error(e))?;
-        self.check_api_version(&resp);
+        self.check_api_version(&resp)?;
         Ok(resp)
     }
 
     fn post(&self, path: &str, body: &impl serde::Serialize) -> Result<ureq::Response> {
         let url = format!("{}{path}", self.base_url);
-        let resp = self.agent.post(&url)
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .send_json(serde_json::to_value(body)?)
+        let resp = self
+            .agent
+            .post(&url)
+            .set("Authorization", &self.auth_header)
+            .send_json(body)
             .map_err(|e| self.handle_error(e))?;
-        self.check_api_version(&resp);
+        self.check_api_version(&resp)?;
         Ok(resp)
     }
 
     fn delete(&self, path: &str) -> Result<ureq::Response> {
         let url = format!("{}{path}", self.base_url);
-        let resp = self.agent.delete(&url)
-            .set("Authorization", &format!("Bearer {}", self.token))
+        let resp = self
+            .agent
+            .delete(&url)
+            .set("Authorization", &self.auth_header)
             .call()
             .map_err(|e| self.handle_error(e))?;
-        self.check_api_version(&resp);
+        self.check_api_version(&resp)?;
         Ok(resp)
     }
 
@@ -69,16 +151,18 @@ impl ApiClient {
         }
     }
 
-    fn check_api_version(&self, resp: &ureq::Response) {
+    fn check_api_version(&self, resp: &ureq::Response) -> Result<()> {
         if let Some(version_str) = resp.header("X-Noid-Api-Version") {
-            if let Ok(version) = version_str.parse::<u32>() {
-                if version != API_VERSION {
-                    eprintln!(
-                        "warning: server API version ({version}) differs from client ({API_VERSION})"
-                    );
-                }
-            }
+            let version = version_str.parse::<u32>().with_context(|| {
+                format!("server sent unrecognized API version header: '{version_str}'")
+            })?;
+            anyhow::ensure!(
+                version == API_VERSION,
+                "server API version ({version}) is incompatible with client ({API_VERSION}); \
+                 upgrade noid or noid-server"
+            );
         }
+        Ok(())
     }
 
     // --- Public API methods ---
@@ -89,6 +173,7 @@ impl ApiClient {
     }
 
     pub fn create_vm(&self, name: &str, cpus: u32, mem_mib: u32) -> Result<VmInfo> {
+        let name = Self::validate_name(name)?;
         let req = CreateVmRequest {
             name: name.to_string(),
             cpus,
@@ -104,16 +189,19 @@ impl ApiClient {
     }
 
     pub fn get_vm(&self, name: &str) -> Result<VmInfo> {
+        let name = Self::validate_name(name)?;
         let resp = self.get(&format!("/v1/vms/{name}"))?;
         resp.into_json().context("failed to parse VM info")
     }
 
     pub fn destroy_vm(&self, name: &str) -> Result<()> {
+        let name = Self::validate_name(name)?;
         self.delete(&format!("/v1/vms/{name}"))?;
         Ok(())
     }
 
     pub fn exec_vm(&self, name: &str, command: &[String], env: &[String]) -> Result<ExecResponse> {
+        let name = Self::validate_name(name)?;
         let req = ExecRequest {
             command: command.to_vec(),
             tty: false,
@@ -124,6 +212,7 @@ impl ApiClient {
     }
 
     pub fn create_checkpoint(&self, name: &str, label: Option<&str>) -> Result<CheckpointInfo> {
+        let name = Self::validate_name(name)?;
         let req = CheckpointRequest {
             label: label.map(|s| s.to_string()),
         };
@@ -133,6 +222,7 @@ impl ApiClient {
     }
 
     pub fn list_checkpoints(&self, name: &str) -> Result<Vec<CheckpointInfo>> {
+        let name = Self::validate_name(name)?;
         let resp = self.get(&format!("/v1/vms/{name}/checkpoints"))?;
         resp.into_json()
             .context("failed to parse checkpoints response")
@@ -144,6 +234,10 @@ impl ApiClient {
         checkpoint_id: &str,
         new_name: Option<&str>,
     ) -> Result<VmInfo> {
+        let name = Self::validate_name(name)?;
+        if let Some(n) = new_name {
+            Self::validate_name(n)?;
+        }
         let req = RestoreRequest {
             checkpoint_id: checkpoint_id.to_string(),
             new_name: new_name.map(|s| s.to_string()),
@@ -162,6 +256,10 @@ impl ApiClient {
     }
 
     /// Connect a WebSocket with a connect/handshake timeout.
+    ///
+    /// WebSocket connections are established independently of `self.agent`
+    /// because ureq does not support HTTP Upgrade. The agent is used only
+    /// for REST calls (get/post/delete).
     pub fn ws_connect(
         &self,
         path: &str,
@@ -191,26 +289,52 @@ impl ApiClient {
             anyhow::bail!("no addresses found for server");
         }
 
-        let mut last_err = None;
-        let stream = addrs
-            .iter()
-            .find_map(|addr| match TcpStream::connect_timeout(addr, timeout) {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    last_err = Some(e);
-                    None
+        let deadline = std::time::Instant::now() + timeout;
+        let mut last_err = None::<String>;
+        let mut stream = None;
+
+        for (i, addr) in addrs.iter().enumerate() {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let attempt_timeout = if i + 1 == addrs.len() {
+                remaining
+            } else {
+                remaining.min(WS_CONNECT_ATTEMPT_CAP)
+            };
+            if attempt_timeout.is_zero() {
+                break;
+            }
+
+            match TcpStream::connect_timeout(addr, attempt_timeout) {
+                Ok(s) => {
+                    // Set a read timeout for the TLS + WS handshake phase.
+                    let _ = s.set_read_timeout(Some(remaining));
+                    stream = Some(s);
+                    break;
                 }
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!("connection timed out: {}", last_err.unwrap())
-            })?;
+                Err(e) => {
+                    last_err = Some(format!("{addr}: {e}"));
+                }
+            }
+        }
+
+        let stream = stream.ok_or_else(|| {
+            if let Some(err) = last_err {
+                anyhow::anyhow!("connection failed ({err})")
+            } else {
+                anyhow::anyhow!("connection timed out to {addr_str}")
+            }
+        })?;
         // connect_timeout uses non-blocking connect internally and may leave
         // the socket in non-blocking mode on some platforms — force blocking.
         stream.set_nonblocking(false)?;
         let request = tungstenite::http::Request::builder()
             .uri(&ws_url)
             .header("Host", authority.as_str())
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", &self.auth_header)
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
@@ -221,15 +345,25 @@ impl ApiClient {
             .body(())
             .context("failed to build WS request")?;
 
-        let (ws, _) =
-            tungstenite::client_tls(request, stream).map_err(|e| match e {
-                tungstenite::HandshakeError::Interrupted(_) => {
-                    anyhow::anyhow!("WebSocket handshake interrupted (WouldBlock)")
-                }
-                tungstenite::HandshakeError::Failure(e) => {
-                    anyhow::anyhow!("WebSocket handshake failed: {e}")
-                }
-            })?;
+        let (ws, _) = tungstenite::client_tls(request, stream).map_err(|e| match e {
+            tungstenite::HandshakeError::Interrupted(_) => {
+                anyhow::anyhow!("WebSocket handshake interrupted (WouldBlock)")
+            }
+            tungstenite::HandshakeError::Failure(e) => {
+                anyhow::anyhow!("WebSocket handshake failed: {e}")
+            }
+        })?;
+
+        // Clear the handshake read timeout; callers manage their own blocking.
+        match ws.get_ref() {
+            tungstenite::stream::MaybeTlsStream::Plain(s) => {
+                let _ = s.set_read_timeout(None);
+            }
+            tungstenite::stream::MaybeTlsStream::Rustls(s) => {
+                let _ = s.get_ref().set_read_timeout(None);
+            }
+            _ => {}
+        }
 
         Ok(ws)
     }
@@ -239,6 +373,24 @@ impl ApiClient {
 mod tests {
     use super::*;
     use crate::config::ServerSection;
+
+    #[test]
+    fn normalize_server_url_trims_and_strips_trailing_slash() {
+        let normalized = normalize_server_url("  https://noid.example.com/ ").unwrap();
+        assert_eq!(normalized, "https://noid.example.com");
+    }
+
+    #[test]
+    fn normalize_server_url_rejects_missing_scheme() {
+        let err = normalize_server_url("noid.example.com").unwrap_err();
+        assert!(err.to_string().contains("server URL must include scheme"));
+    }
+
+    #[test]
+    fn normalize_server_url_rejects_unsupported_scheme() {
+        let err = normalize_server_url("ftp://noid.example.com").unwrap_err();
+        assert!(err.to_string().contains("unsupported URL scheme"));
+    }
 
     #[test]
     fn ws_url_converts_http_to_ws() {
@@ -274,5 +426,48 @@ mod tests {
             api.ws_url("/v1/vms/test/console"),
             "ws://localhost/v1/vms/test/console"
         );
+    }
+
+    #[test]
+    fn validate_name_accepts_valid_names() {
+        assert!(ApiClient::validate_name("myvm").is_ok());
+        assert!(ApiClient::validate_name("test_vm_01").is_ok());
+        assert!(ApiClient::validate_name("a").is_ok());
+        assert!(ApiClient::validate_name("my.vm").is_ok());
+        assert!(ApiClient::validate_name("VM-123").is_ok());
+    }
+
+    #[test]
+    fn validate_name_rejects_empty() {
+        let err = ApiClient::validate_name("").unwrap_err();
+        assert!(err.to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn validate_name_rejects_too_long() {
+        let long = "a".repeat(65);
+        assert!(ApiClient::validate_name(&long).is_err());
+        assert!(ApiClient::validate_name(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn validate_name_rejects_path_traversal() {
+        assert!(ApiClient::validate_name("../etc").is_err());
+        assert!(ApiClient::validate_name("foo/bar").is_err());
+        assert!(ApiClient::validate_name("a\\b").is_err());
+        assert!(ApiClient::validate_name("foo..bar").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_leading_dot_or_dash() {
+        assert!(ApiClient::validate_name(".hidden").is_err());
+        assert!(ApiClient::validate_name("-flag").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_special_chars() {
+        assert!(ApiClient::validate_name("my vm").is_err());
+        assert!(ApiClient::validate_name("vm?name").is_err());
+        assert!(ApiClient::validate_name("vm#1").is_err());
     }
 }

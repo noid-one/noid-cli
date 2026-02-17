@@ -185,7 +185,7 @@ noid destroy my-vm
 | `noid list` | List all VMs |
 | `noid info [name]` | Show VM details |
 | `noid exec [name] [-e KEY=VAL]... -- <command...>` | Run a command inside a VM |
-| `noid console [name]` | Interactive serial console (type "exit" to detach) |
+| `noid console [name] [-e KEY=VAL]...` | Interactive serial console (type "exit" to detach) |
 | `noid checkpoint [name] [--label TEXT]` | Snapshot a running VM |
 | `noid checkpoints [name]` | List checkpoints |
 | `noid restore [name] <id> [--as NEW]` | Restore from checkpoint |

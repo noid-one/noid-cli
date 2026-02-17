@@ -28,6 +28,10 @@ impl ClientConfig {
         Self::dir().join("config.toml")
     }
 
+    pub fn config_path() -> PathBuf {
+        Self::path()
+    }
+
     pub fn load() -> Result<Self> {
         let path = Self::path();
         if !path.exists() {

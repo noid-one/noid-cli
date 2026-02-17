@@ -15,11 +15,17 @@ pub fn validate_name(name: &str, kind: &str) -> Result<()> {
     if name.len() > 64 {
         bail!("{kind} name too long (max 64 characters)");
     }
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
-        bail!("{kind} name contains invalid characters (/, \\, or ..)");
-    }
     if name.starts_with('.') || name.starts_with('-') {
         bail!("{kind} name cannot start with . or -");
+    }
+    if name.contains("..") {
+        bail!("{kind} name cannot contain '..'");
+    }
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+    {
+        bail!("{kind} name contains invalid characters (only a-z, A-Z, 0-9, _, -, . allowed)");
     }
     Ok(())
 }

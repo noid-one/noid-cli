@@ -5,7 +5,7 @@ use std::process::Command;
 use crate::config::Config;
 
 /// Validate that a name is safe to use in paths (no path traversal).
-/// Names must be alphanumeric, dashes, or underscores only.
+/// Names must consist of alphanumeric characters, underscores, hyphens, or dots only.
 fn validate_name(name: &str, kind: &str) -> Result<()> {
     if name.is_empty() {
         bail!("{kind} name cannot be empty");
@@ -13,12 +13,17 @@ fn validate_name(name: &str, kind: &str) -> Result<()> {
     if name.len() > 64 {
         bail!("{kind} name too long (max 64 characters)");
     }
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
-        bail!("{kind} name contains invalid characters (/, \\, or ..)");
-    }
-    // Additional check: name must not start with . or -
     if name.starts_with('.') || name.starts_with('-') {
         bail!("{kind} name cannot start with . or -");
+    }
+    if name.contains("..") {
+        bail!("{kind} name cannot contain '..'");
+    }
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+    {
+        bail!("{kind} name contains invalid characters (only a-z, A-Z, 0-9, _, -, . allowed)");
     }
     Ok(())
 }

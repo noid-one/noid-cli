@@ -351,6 +351,8 @@ Point your domain to the server before enabling Caddy (Let's Encrypt needs to ve
 - `A` record: `server.noid.one` → your server's IPv4 address
 - `AAAA` record: `server.noid.one` → your server's IPv6 address (optional)
 
+If IPv6 is not fully routed to your host, do not publish an `AAAA` record yet. A broken IPv6 record can cause slow client connects before IPv4 fallback.
+
 **Important:** Wait for DNS propagation (typically 5-60 minutes) before running the installer with `NOID_DOMAIN`. You can check propagation with:
 ```bash
 dig +short server.noid.one
@@ -364,6 +366,8 @@ Once HTTPS is active, configure clients with the HTTPS URL:
 ```bash
 noid auth setup --url https://server.noid.one --token <token>
 ```
+
+If clients were previously configured with `http://<old-ip>:7654`, they must run `auth setup` again with the HTTPS domain. Rotating only the token does not replace the saved URL.
 
 The client automatically uses `wss://` for WebSocket connections (console, exec) when the server URL is `https://`.
 
