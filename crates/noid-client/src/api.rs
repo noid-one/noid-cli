@@ -8,19 +8,24 @@ const API_VERSION: u32 = 1;
 pub struct ApiClient {
     base_url: String,
     token: String,
+    agent: ureq::Agent,
 }
 
 impl ApiClient {
     pub fn new(server: &ServerSection) -> Self {
+        let agent = ureq::AgentBuilder::new()
+            .user_agent(&format!("noid/{}", env!("CARGO_PKG_VERSION")))
+            .build();
         Self {
             base_url: server.url.trim_end_matches('/').to_string(),
             token: server.token.clone(),
+            agent,
         }
     }
 
     fn get(&self, path: &str) -> Result<ureq::Response> {
         let url = format!("{}{path}", self.base_url);
-        let resp = ureq::get(&url)
+        let resp = self.agent.get(&url)
             .set("Authorization", &format!("Bearer {}", self.token))
             .call()
             .map_err(|e| self.handle_error(e))?;
@@ -30,7 +35,7 @@ impl ApiClient {
 
     fn post(&self, path: &str, body: &impl serde::Serialize) -> Result<ureq::Response> {
         let url = format!("{}{path}", self.base_url);
-        let resp = ureq::post(&url)
+        let resp = self.agent.post(&url)
             .set("Authorization", &format!("Bearer {}", self.token))
             .send_json(serde_json::to_value(body)?)
             .map_err(|e| self.handle_error(e))?;
@@ -40,7 +45,7 @@ impl ApiClient {
 
     fn delete(&self, path: &str) -> Result<ureq::Response> {
         let url = format!("{}{path}", self.base_url);
-        let resp = ureq::delete(&url)
+        let resp = self.agent.delete(&url)
             .set("Authorization", &format!("Bearer {}", self.token))
             .call()
             .map_err(|e| self.handle_error(e))?;
@@ -178,14 +183,27 @@ impl ApiClient {
             });
 
         let addr_str = format!("{host}:{port}");
-        let sock_addr = addr_str
+        let addrs: Vec<_> = addr_str
             .to_socket_addrs()
             .context("failed to resolve server address")?
-            .next()
-            .context("no addresses found for server")?;
+            .collect();
+        if addrs.is_empty() {
+            anyhow::bail!("no addresses found for server");
+        }
 
-        let stream =
-            TcpStream::connect_timeout(&sock_addr, timeout).context("connection timed out")?;
+        let mut last_err = None;
+        let stream = addrs
+            .iter()
+            .find_map(|addr| match TcpStream::connect_timeout(addr, timeout) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    last_err = Some(e);
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("connection timed out: {}", last_err.unwrap())
+            })?;
         // connect_timeout uses non-blocking connect internally and may leave
         // the socket in non-blocking mode on some platforms — force blocking.
         stream.set_nonblocking(false)?;
