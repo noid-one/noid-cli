@@ -1,10 +1,12 @@
 # noid
 
-A CLI for managing Firecracker microVMs with instant checkpointing and restore.
+A CLI for managing microVMs with instant checkpointing and restore.
 
 Create VMs in one command. Checkpoint them instantly. Clone and restore from any checkpoint.
 
-noid runs as a **client-server** system: `noid-server` manages Firecracker VMs on a Linux host, and `noid` is a CLI client that talks to the server over HTTP and WebSocket. The client can run from anywhere — Linux x86_64, macOS Intel, and macOS Apple Silicon.
+noid runs as a **client-server** system: `noid-server` manages micro VMs on a Linux host, and `noid` is a CLI client that talks to the server over HTTP and WebSocket. The client can run from anywhere — Linux x86_64, macOS Intel, and macOS Apple Silicon.
+
+>⚠️ EXPERIMENTAL SOFTWARE - This project is in active development. Expect breaking changes on each commit. No backwards compatibility will be supported yet.
 
 ## Install
 
