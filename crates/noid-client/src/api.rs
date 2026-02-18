@@ -260,13 +260,17 @@ impl ApiClient {
     /// WebSocket connections are established independently of `self.agent`
     /// because ureq does not support HTTP Upgrade. The agent is used only
     /// for REST calls (get/post/delete).
+    ///
+    /// Addresses are sorted IPv4-first to avoid timeouts when IPv6 transit
+    /// is broken. The full TCP+TLS+WS pipeline is retried per address so
+    /// that a TLS/handshake failure on one path falls back to the next.
     pub fn ws_connect(
         &self,
         path: &str,
         timeout: std::time::Duration,
     ) -> Result<tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>>
     {
-        use std::net::{TcpStream, ToSocketAddrs};
+        use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 
         let ws_url = self.ws_url(path);
         let uri: tungstenite::http::Uri = ws_url.parse().context("invalid WebSocket URL")?;
@@ -281,7 +285,7 @@ impl ApiClient {
             });
 
         let addr_str = format!("{host}:{port}");
-        let addrs: Vec<_> = addr_str
+        let mut addrs: Vec<_> = addr_str
             .to_socket_addrs()
             .context("failed to resolve server address")?
             .collect();
@@ -289,9 +293,26 @@ impl ApiClient {
             anyhow::bail!("no addresses found for server");
         }
 
+        // Prefer IPv4 — avoids timeout when IPv6 transit is broken.
+        addrs.sort_by_key(|a| match a {
+            SocketAddr::V4(_) => 0,
+            SocketAddr::V6(_) => 1,
+        });
+
+        let verbose = env_truthy("NOID_VERBOSE");
+        if verbose {
+            eprintln!(
+                "[ws] connecting to {addr_str} ({} address{})",
+                addrs.len(),
+                if addrs.len() == 1 { "" } else { "es" }
+            );
+            for a in &addrs {
+                eprintln!("[ws]   {a}");
+            }
+        }
+
         let deadline = std::time::Instant::now() + timeout;
-        let mut last_err = None::<String>;
-        let mut stream = None;
+        let mut errors: Vec<String> = Vec::new();
 
         for (i, addr) in addrs.iter().enumerate() {
             let now = std::time::Instant::now();
@@ -304,68 +325,103 @@ impl ApiClient {
             } else {
                 remaining.min(WS_CONNECT_ATTEMPT_CAP)
             };
-            if attempt_timeout.is_zero() {
-                break;
+
+            if verbose {
+                eprintln!("[ws] trying {addr} (timeout {attempt_timeout:.1?})...");
             }
 
-            match TcpStream::connect_timeout(addr, attempt_timeout) {
-                Ok(s) => {
-                    // Set a read timeout for the TLS + WS handshake phase.
-                    let _ = s.set_read_timeout(Some(remaining));
-                    stream = Some(s);
-                    break;
-                }
+            // --- TCP connect ---
+            let stream = match TcpStream::connect_timeout(addr, attempt_timeout) {
+                Ok(s) => s,
                 Err(e) => {
-                    last_err = Some(format!("{addr}: {e}"));
+                    let msg = format!("{addr}: TCP connect failed: {e}");
+                    if verbose {
+                        eprintln!("[ws]   {msg}");
+                    }
+                    errors.push(msg);
+                    continue;
                 }
+            };
+
+            // Set a read timeout covering TLS + WS handshake.
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                errors.push(format!("{addr}: deadline expired after TCP connect"));
+                continue;
             }
+            let _ = stream.set_read_timeout(Some(remaining));
+            // connect_timeout may leave the socket non-blocking — force blocking.
+            if let Err(e) = stream.set_nonblocking(false) {
+                errors.push(format!("{addr}: set_nonblocking failed: {e}"));
+                continue;
+            }
+
+            // --- TLS + WebSocket handshake ---
+            let request = tungstenite::http::Request::builder()
+                .uri(&ws_url)
+                .header("Host", authority.as_str())
+                .header("Authorization", &self.auth_header)
+                .header("Connection", "Upgrade")
+                .header("Upgrade", "websocket")
+                .header("Sec-WebSocket-Version", "13")
+                .header(
+                    "Sec-WebSocket-Key",
+                    tungstenite::handshake::client::generate_key(),
+                )
+                .body(())
+                .context("failed to build WS request")?;
+
+            let ws = match tungstenite::client_tls(request, stream) {
+                Ok((ws, _)) => ws,
+                Err(e) => {
+                    let detail = match &e {
+                        tungstenite::HandshakeError::Interrupted(_) => {
+                            "handshake interrupted (WouldBlock)".to_string()
+                        }
+                        tungstenite::HandshakeError::Failure(inner) => {
+                            format!("handshake failed: {inner}")
+                        }
+                    };
+                    let msg = format!("{addr}: {detail}");
+                    if verbose {
+                        eprintln!("[ws]   {msg}");
+                    }
+                    errors.push(msg);
+                    continue;
+                }
+            };
+
+            if verbose {
+                eprintln!("[ws] connected via {addr}");
+            }
+
+            // Clear the handshake read timeout; callers manage their own blocking.
+            match ws.get_ref() {
+                tungstenite::stream::MaybeTlsStream::Plain(s) => {
+                    let _ = s.set_read_timeout(None);
+                }
+                tungstenite::stream::MaybeTlsStream::Rustls(s) => {
+                    let _ = s.get_ref().set_read_timeout(None);
+                }
+                _ => {}
+            }
+
+            return Ok(ws);
         }
 
-        let stream = stream.ok_or_else(|| {
-            if let Some(err) = last_err {
-                anyhow::anyhow!("connection failed ({err})")
-            } else {
-                anyhow::anyhow!("connection timed out to {addr_str}")
-            }
-        })?;
-        // connect_timeout uses non-blocking connect internally and may leave
-        // the socket in non-blocking mode on some platforms — force blocking.
-        stream.set_nonblocking(false)?;
-        let request = tungstenite::http::Request::builder()
-            .uri(&ws_url)
-            .header("Host", authority.as_str())
-            .header("Authorization", &self.auth_header)
-            .header("Connection", "Upgrade")
-            .header("Upgrade", "websocket")
-            .header("Sec-WebSocket-Version", "13")
-            .header(
-                "Sec-WebSocket-Key",
-                tungstenite::handshake::client::generate_key(),
-            )
-            .body(())
-            .context("failed to build WS request")?;
-
-        let (ws, _) = tungstenite::client_tls(request, stream).map_err(|e| match e {
-            tungstenite::HandshakeError::Interrupted(_) => {
-                anyhow::anyhow!("WebSocket handshake interrupted (WouldBlock)")
-            }
-            tungstenite::HandshakeError::Failure(e) => {
-                anyhow::anyhow!("WebSocket handshake failed: {e}")
-            }
-        })?;
-
-        // Clear the handshake read timeout; callers manage their own blocking.
-        match ws.get_ref() {
-            tungstenite::stream::MaybeTlsStream::Plain(s) => {
-                let _ = s.set_read_timeout(None);
-            }
-            tungstenite::stream::MaybeTlsStream::Rustls(s) => {
-                let _ = s.get_ref().set_read_timeout(None);
-            }
-            _ => {}
+        // All addresses exhausted (or deadline expired before any could be tried).
+        if errors.is_empty() {
+            anyhow::bail!("connection timed out to {addr_str}");
+        } else if errors.len() == 1 {
+            anyhow::bail!("connection failed ({})", errors[0]);
+        } else {
+            anyhow::bail!(
+                "{}/{} addresses failed:\n  {}",
+                errors.len(),
+                addrs.len(),
+                errors.join("\n  ")
+            );
         }
-
-        Ok(ws)
     }
 }
 
@@ -469,5 +525,25 @@ mod tests {
         assert!(ApiClient::validate_name("my vm").is_err());
         assert!(ApiClient::validate_name("vm?name").is_err());
         assert!(ApiClient::validate_name("vm#1").is_err());
+    }
+
+    #[test]
+    fn ws_connect_sorts_ipv4_first() {
+        use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+
+        let mut addrs = vec![
+            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 443, 0, 0)),
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 443)),
+            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 443, 0, 0)),
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 443)),
+        ];
+        addrs.sort_by_key(|a| match a {
+            SocketAddr::V4(_) => 0,
+            SocketAddr::V6(_) => 1,
+        });
+        assert!(matches!(addrs[0], SocketAddr::V4(_)));
+        assert!(matches!(addrs[1], SocketAddr::V4(_)));
+        assert!(matches!(addrs[2], SocketAddr::V6(_)));
+        assert!(matches!(addrs[3], SocketAddr::V6(_)));
     }
 }
