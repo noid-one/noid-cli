@@ -7,6 +7,15 @@ const API_VERSION: u32 = 1;
 const HTTP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const WS_CONNECT_ATTEMPT_CAP: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Sort socket addresses so IPv4 comes before IPv6.
+/// Avoids timeouts on networks with broken IPv6 transit.
+fn sort_ipv4_first(addrs: &mut [std::net::SocketAddr]) {
+    addrs.sort_by_key(|a| match a {
+        std::net::SocketAddr::V4(_) => 0u8,
+        std::net::SocketAddr::V6(_) => 1,
+    });
+}
+
 fn env_truthy(name: &str) -> bool {
     std::env::var(name)
         .map(|v| {
@@ -68,7 +77,13 @@ impl ApiClient {
         let mut builder = ureq::AgentBuilder::new()
             .user_agent(&format!("noid/{}", env!("CARGO_PKG_VERSION")))
             .timeout_connect(HTTP_CONNECT_TIMEOUT)
-            .timeout_read(std::time::Duration::from_secs(30));
+            .timeout_read(std::time::Duration::from_secs(30))
+            .resolver(|netloc: &str| -> std::io::Result<Vec<std::net::SocketAddr>> {
+                use std::net::ToSocketAddrs;
+                let mut addrs: Vec<_> = netloc.to_socket_addrs()?.collect();
+                sort_ipv4_first(&mut addrs);
+                Ok(addrs)
+            });
         if !using_system_proxy() {
             builder = builder.try_proxy_from_env(false);
         }
@@ -270,7 +285,7 @@ impl ApiClient {
         timeout: std::time::Duration,
     ) -> Result<tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>>
     {
-        use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+        use std::net::{TcpStream, ToSocketAddrs};
 
         let ws_url = self.ws_url(path);
         let uri: tungstenite::http::Uri = ws_url.parse().context("invalid WebSocket URL")?;
@@ -293,11 +308,7 @@ impl ApiClient {
             anyhow::bail!("no addresses found for server");
         }
 
-        // Prefer IPv4 — avoids timeout when IPv6 transit is broken.
-        addrs.sort_by_key(|a| match a {
-            SocketAddr::V4(_) => 0,
-            SocketAddr::V6(_) => 1,
-        });
+        sort_ipv4_first(&mut addrs);
 
         let verbose = env_truthy("NOID_VERBOSE");
         if verbose {
@@ -528,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn ws_connect_sorts_ipv4_first() {
+    fn sort_ipv4_first_orders_v4_before_v6() {
         use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
         let mut addrs = vec![
@@ -537,10 +548,7 @@ mod tests {
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 443, 0, 0)),
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 443)),
         ];
-        addrs.sort_by_key(|a| match a {
-            SocketAddr::V4(_) => 0,
-            SocketAddr::V6(_) => 1,
-        });
+        sort_ipv4_first(&mut addrs);
         assert!(matches!(addrs[0], SocketAddr::V4(_)));
         assert!(matches!(addrs[1], SocketAddr::V4(_)));
         assert!(matches!(addrs[2], SocketAddr::V6(_)));
