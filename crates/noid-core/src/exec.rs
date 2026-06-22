@@ -101,11 +101,7 @@ pub fn exec_via_serial(
         .collect::<Vec<_>>()
         .join(" ");
 
-    // Wrap command: echo start marker, run command, capture exit code, echo exit + end markers.
-    // Prepend a newline to clear partial prompts on the serial tty.
-    let wrapped = format!(
-        "\necho '{marker_start}'; {env_prefix}{escaped_cmd}; echo '{marker_exit}'$?; echo '{marker_end}'\n"
-    );
+    let wrapped = wrap_command(&marker_start, &marker_exit, &marker_end, &env_prefix, &escaped_cmd);
     vm::write_to_serial(vm_dir, wrapped.as_bytes())?;
 
     let timeout = std::time::Duration::from_secs(timeout_secs);
@@ -138,6 +134,30 @@ pub fn exec_via_serial(
             return Ok((output, exit_code, false, truncated));
         }
     }
+}
+
+/// Build the shell line written to the VM serial console to run a command and
+/// frame its output with start/exit/end markers.
+///
+/// The exit marker is emitted with a LEADING newline (via `printf "\n..."`) so it
+/// always lands on its own line even when the command's stdout has no trailing
+/// newline (e.g. `printf abc`, `echo -n`, `curl -w`). Without this, the marker
+/// concatenates onto the last output line — leaking `NOID_EXEC_..._EXIT0` into
+/// stdout and preventing the exit code from being parsed. `$?` is expanded by the
+/// shell for the `printf` argument and therefore reflects the command's exit status,
+/// since `printf` is the immediately following command in the list.
+///
+/// A leading newline is also prepended to clear any partial prompt on the serial tty.
+fn wrap_command(
+    marker_start: &str,
+    marker_exit: &str,
+    marker_end: &str,
+    env_prefix: &str,
+    escaped_cmd: &str,
+) -> String {
+    format!(
+        "\necho '{marker_start}'; {env_prefix}{escaped_cmd}; printf '\\n{marker_exit}%s\\n{marker_end}\\n' \"$?\"\n"
+    )
 }
 
 /// Strip ANSI escape sequences (CSI, OSC, etc.) that shells and terminals
@@ -333,6 +353,61 @@ mod tests {
             super::strip_ansi("\x1b[0m\x1b[1m\x1b[32mtext\x1b[0m"),
             "text"
         );
+    }
+
+    #[test]
+    fn wrap_command_emits_exit_marker_on_its_own_line() {
+        // The exit marker must be preceded by a newline so it never concatenates
+        // onto command output that lacks a trailing newline.
+        let wrapped = super::wrap_command(
+            "NOID_EXEC_dead",
+            "NOID_EXEC_dead_EXIT",
+            "NOID_EXEC_dead_END",
+            "",
+            "printf abc",
+        );
+        assert!(
+            wrapped.contains("printf '\\nNOID_EXEC_dead_EXIT%s\\nNOID_EXEC_dead_END\\n' \"$?\""),
+            "wrapper must printf a leading-newline exit marker capturing $?: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn parse_no_trailing_newline_does_not_leak_marker() {
+        // Regression for BUG-A: a command whose stdout has no trailing newline
+        // (e.g. `printf abc`). With the new wrapper, printf injects a leading
+        // newline before the exit marker, so the marker is on its own line and
+        // neither leaks into output nor loses the exit code.
+        let serial = "NOID_EXEC_dead\nabc\nNOID_EXEC_dead_EXIT0\nNOID_EXEC_dead_END\n";
+        let parsed = parse_marked_output(
+            serial,
+            "NOID_EXEC_dead",
+            "NOID_EXEC_dead_END",
+            "NOID_EXEC_dead_EXIT",
+        )
+        .expect("should parse");
+        assert_eq!(parsed.0, "abc");
+        assert!(
+            !parsed.0.contains("NOID_EXEC"),
+            "internal marker must not leak into output: {:?}",
+            parsed.0
+        );
+        assert_eq!(parsed.1, Some(0));
+    }
+
+    #[test]
+    fn parse_no_trailing_newline_preserves_nonzero_exit() {
+        // Same as above but with a non-zero exit code (e.g. a failing `printf`-less command).
+        let serial = "NOID_EXEC_beef\nhttp_status=200\nNOID_EXEC_beef_EXIT3\nNOID_EXEC_beef_END\n";
+        let parsed = parse_marked_output(
+            serial,
+            "NOID_EXEC_beef",
+            "NOID_EXEC_beef_END",
+            "NOID_EXEC_beef_EXIT",
+        )
+        .expect("should parse");
+        assert_eq!(parsed.0, "http_status=200");
+        assert_eq!(parsed.1, Some(3));
     }
 
     #[test]

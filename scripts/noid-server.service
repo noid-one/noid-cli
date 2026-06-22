@@ -12,6 +12,12 @@ WorkingDirectory=/home/firecracker
 Environment=HOME=/home/firecracker
 Restart=on-failure
 RestartSec=5
+# Firecracker VM processes are spawned as children of noid-server and live in
+# this unit's cgroup. With the default KillMode=control-group, `systemctl stop`
+# or `restart` would SIGKILL the entire cgroup — destroying every running VM.
+# KillMode=process signals only the main server process, so VMs survive a server
+# restart (their sockets/serial FIFOs persist and are re-attached on startup).
+KillMode=process
 ProtectSystem=strict
 ProtectHome=no
 PrivateTmp=yes
